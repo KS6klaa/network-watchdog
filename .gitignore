@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+build/
+dist/
+release/
+logs/
+
+.venv/
+venv/
+
+watchdog_settings.json
+NetworkWatchdog.spec
+

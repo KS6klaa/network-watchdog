@@ -1,0 +1,95 @@
+$ErrorActionPreference = "Stop"
+
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$releaseRoot = Join-Path $root "release"
+$installerRoot = Join-Path $releaseRoot "NetworkWatchdogInstaller"
+$appBundle = Join-Path $installerRoot "NetworkWatchdog"
+$zipPath = Join-Path $releaseRoot "NetworkWatchdogInstaller.zip"
+$setupBuildRoot = Join-Path $releaseRoot "SetupBuild"
+$payloadZip = Join-Path $setupBuildRoot "install_payload.zip"
+$setupScript = Join-Path $setupBuildRoot "install_from_payload.ps1"
+$sedPath = Join-Path $setupBuildRoot "NetworkWatchdogSetup.sed"
+$setupExePath = Join-Path $releaseRoot "SetupNetworkWatchdog.exe"
+
+Set-Location $root
+
+if (Test-Path (Join-Path $root "build")) {
+    Remove-Item -Recurse -Force (Join-Path $root "build")
+}
+if (Test-Path (Join-Path $root "dist")) {
+    Remove-Item -Recurse -Force (Join-Path $root "dist")
+}
+if (Test-Path $installerRoot) {
+    Remove-Item -Recurse -Force $installerRoot
+}
+if (Test-Path $zipPath) {
+    Remove-Item -Force $zipPath
+}
+if (Test-Path $setupBuildRoot) {
+    Remove-Item -Recurse -Force $setupBuildRoot
+}
+if (Test-Path $setupExePath) {
+    Remove-Item -Force $setupExePath
+}
+
+python -m PyInstaller `
+    --noconfirm `
+    --onedir `
+    --windowed `
+    --noupx `
+    --name NetworkWatchdog `
+    network_watchdog.py
+
+New-Item -ItemType Directory -Force $installerRoot | Out-Null
+Copy-Item -Recurse -Force (Join-Path $root "dist\NetworkWatchdog") $appBundle
+Copy-Item -Force (Join-Path $root "watchdog_targets.json") (Join-Path $appBundle "watchdog_targets.json")
+Copy-Item -Force (Join-Path $root "packaging\default_watchdog_settings.json") (Join-Path $appBundle "watchdog_settings.json")
+Copy-Item -Force (Join-Path $root "README.md") (Join-Path $appBundle "README.md")
+Copy-Item -Force (Join-Path $root "packaging\install.bat") (Join-Path $installerRoot "install.bat")
+Copy-Item -Force (Join-Path $root "packaging\uninstall.bat") (Join-Path $installerRoot "uninstall.bat")
+
+Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $zipPath -Force
+
+New-Item -ItemType Directory -Force $setupBuildRoot | Out-Null
+Compress-Archive -Path $appBundle -DestinationPath $payloadZip -Force
+Copy-Item -Force (Join-Path $root "packaging\install_from_payload.ps1") $setupScript
+
+$sedContent = @"
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=$setupExePath
+FriendlyName=Network Watchdog Setup
+AppLaunched=powershell.exe -NoProfile -ExecutionPolicy Bypass -File install_from_payload.ps1
+PostInstallCmd=<None>
+AdminQuietInstCmd=
+UserQuietInstCmd=
+SourceFiles=SourceFiles
+[Strings]
+FILE0="install_payload.zip"
+FILE1="install_from_payload.ps1"
+[SourceFiles]
+SourceFiles0=$setupBuildRoot
+[SourceFiles0]
+%FILE0%=
+%FILE1%=
+"@
+$sedContent | Set-Content -Path $sedPath -Encoding ASCII
+
+iexpress.exe /N /Q $sedPath | Out-Null
+
+Write-Host "Installer package created:"
+Write-Host $zipPath
+Write-Host $setupExePath

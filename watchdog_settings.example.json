@@ -1,0 +1,22 @@
+{
+  "interval_seconds": 180,
+  "timeout_seconds": 12,
+  "degraded_latency_ms": 1500,
+  "system_alert_threshold": 95,
+  "sound_alert_enabled": true,
+  "popup_alert_enabled": true,
+  "email_alert_enabled": false,
+  "recovery_email_enabled": true,
+  "minimize_to_tray_on_close": true,
+  "language": "en",
+  "smtp_host": "smtp.qq.com",
+  "smtp_port": 465,
+  "sender_email": "",
+  "sender_name": "Network Watchdog / VPN Coffee Companion",
+  "auth_code": "",
+  "recipient_1": "",
+  "recipient_2": "",
+  "recipient_3": "",
+  "email_alert_count_date": "1970-01-01",
+  "email_alert_count_today": 0
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Google",
+    "url": "https://www.google.com/generate_204"
+  },
+  {
+    "name": "Amazon",
+    "url": "https://www.amazon.com/"
+  },
+  {
+    "name": "AWS",
+    "url": "https://aws.amazon.com/"
+  },
+  {
+    "name": "YouTube",
+    "url": "https://www.youtube.com/generate_204"
+  },
+  {
+    "name": "Cloudflare",
+    "url": "https://www.cloudflare.com/"
+  }
+]
