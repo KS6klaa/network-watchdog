@@ -1,5 +1,7 @@
 # Network Watchdog / VPN Coffee Companion
 
+Current stable version: `1.0.3`
+
 Windows 10 / 11 desktop watchdog for checking whether the local machine can reach selected external websites over real HTTPS requests, while also tracking local CPU, memory, and C drive usage.
 
 仅适用于 Windows 10 / 11 的桌面看门狗工具，第二名称为 `VPN 咖啡伴侣`。它会用真实 HTTPS 请求定期检测本机访问外部网站是否通畅，同时监控本机 CPU、内存和 C 盘占用率。
@@ -106,6 +108,15 @@ Output files:
 - `release/NetworkWatchdogInstaller.zip`
 
 The runtime package uses PyInstaller `onedir` mode instead of `onefile` mode to reduce antivirus false positives.
+
+## Release Notes
+
+### v1.0.3
+
+- Added explicit versioning in the desktop application
+- Fixed packaged HTTPS probing by using a bundled certificate chain via `certifi`
+- Switched the default Cloudflare probe target to a more automation-friendly endpoint
+- Kept the bilingual README and English UI screenshot in sync with the public repository
 
 ## Why The Installer Is 30+ MB
 

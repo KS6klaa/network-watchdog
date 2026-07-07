@@ -19,6 +19,11 @@ from pathlib import Path
 from urllib import error, request
 
 try:
+    import certifi
+except Exception:
+    certifi = None
+
+try:
     import tkinter as tk
     from tkinter import messagebox, ttk
 except Exception as exc:
@@ -61,6 +66,7 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
+APP_VERSION = "1.0.3"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_DEGRADED_LATENCY_MS = 1500
@@ -494,6 +500,12 @@ def login_smtp_with_auth_code(
     server.auth("LOGIN", server.auth_login)
 
 
+def create_https_ssl_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
 def describe_http_status(code: int, language: str) -> str:
     if code == 200:
         return tr(language, "http_200")
@@ -520,7 +532,7 @@ def collect_system_metrics() -> dict:
 class NetworkWatchdogApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title(APP_TITLE)
+        self.root.title(f"{APP_TITLE} v{APP_VERSION}")
         self.root.geometry("1080x720")
         self.root.minsize(960, 640)
 
@@ -1064,7 +1076,8 @@ class NetworkWatchdogApp:
             },
         )
         try:
-            with request.urlopen(req, timeout=timeout) as response:
+            ssl_context = create_https_ssl_context()
+            with request.urlopen(req, timeout=timeout, context=ssl_context) as response:
                 latency_ms = int((time.perf_counter() - started) * 1000)
                 code = getattr(response, "status", None) or response.getcode()
                 return {
@@ -1086,6 +1099,17 @@ class NetworkWatchdogApp:
                 "latency_ms": latency_ms,
                 "detail_code": exc.code,
                 "detail": self._t("http_error", code=exc.code),
+                "checked_at": checked_at,
+                "tag": "fail",
+            }
+        except ssl.SSLCertVerificationError:
+            return {
+                "site": target.name,
+                "status": "FAIL",
+                "latency": "-",
+                "latency_ms": None,
+                "detail_code": None,
+                "detail": "SSL certificate verification failed on this machine.",
                 "checked_at": checked_at,
                 "tag": "fail",
             }
@@ -1459,7 +1483,7 @@ class NetworkWatchdogApp:
             if (DEFAULT_SMTP_HOST, port) not in routes:
                 routes.append((DEFAULT_SMTP_HOST, port))
 
-        context = ssl.create_default_context()
+        context = create_https_ssl_context()
         errors = []
         for host, port in routes:
             try:
