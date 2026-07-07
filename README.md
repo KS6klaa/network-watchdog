@@ -1,6 +1,6 @@
 # Network Watchdog / VPN Coffee Companion
 
-Current stable version: `1.0.4`
+Current stable version: `1.0.5`
 
 Windows 10 / 11 desktop watchdog for checking whether the local machine can reach selected external websites over real HTTPS requests, while also tracking local CPU, memory, and C drive usage.
 
@@ -110,6 +110,12 @@ Output files:
 The runtime package uses PyInstaller `onedir` mode instead of `onefile` mode to reduce antivirus false positives.
 
 ## Release Notes
+
+### v1.0.5
+
+- Added configurable `Minimum OK targets`, defaulting to `2`
+- Changed network state logic so partial target failures do not alert if the minimum success count is still met
+- Disabled popup alerts by default and migrated older saved settings away from the old popup default
 
 ### v1.0.4
 

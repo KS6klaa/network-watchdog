@@ -67,11 +67,12 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_DEGRADED_LATENCY_MS = 1500
+DEFAULT_MINIMUM_OK_TARGETS = 2
 DEFAULT_SYSTEM_ALERT_THRESHOLD = 95
 HISTORY_WINDOW_SECONDS = 6 * 60 * 60
 DEFAULT_SMTP_HOST = "smtp.qq.com"
@@ -94,6 +95,7 @@ TEXT = {
         "refresh_s": "Refresh (s)",
         "timeout_s": "Timeout (s)",
         "degraded_ms": "Degraded latency (ms)",
+        "minimum_ok": "Minimum OK targets",
         "language": "Language",
         "apply": "Apply",
         "refresh_now": "Refresh now",
@@ -182,6 +184,7 @@ TEXT = {
         "refresh_s": "\u5237\u65b0\u79d2\u6570",
         "timeout_s": "\u8d85\u65f6\u79d2\u6570",
         "degraded_ms": "\u5ef6\u8fdf\u9608\u503c(ms)",
+        "minimum_ok": "\u6700\u5c11\u6b63\u5e38\u76ee\u6807\u6570",
         "language": "\u8bed\u8a00",
         "apply": "\u5e94\u7528",
         "refresh_now": "\u7acb\u5373\u5237\u65b0",
@@ -327,9 +330,10 @@ def default_settings() -> dict:
         "interval_seconds": DEFAULT_INTERVAL_SECONDS,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "degraded_latency_ms": DEFAULT_DEGRADED_LATENCY_MS,
+        "minimum_ok_targets": DEFAULT_MINIMUM_OK_TARGETS,
         "system_alert_threshold": DEFAULT_SYSTEM_ALERT_THRESHOLD,
         "sound_alert_enabled": True,
-        "popup_alert_enabled": True,
+        "popup_alert_enabled": False,
         "email_alert_enabled": False,
         "recovery_email_enabled": True,
         "minimize_to_tray_on_close": True,
@@ -349,6 +353,7 @@ def default_settings() -> dict:
 
 def load_settings() -> dict:
     settings = default_settings()
+    should_save = False
     if not SETTINGS_PATH.exists():
         save_settings(settings)
         return settings
@@ -356,8 +361,16 @@ def load_settings() -> dict:
         saved = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         if isinstance(saved, dict):
             settings.update(saved)
+            if "minimum_ok_targets" not in saved:
+                settings["minimum_ok_targets"] = DEFAULT_MINIMUM_OK_TARGETS
+                should_save = True
+            if saved.get("popup_alert_enabled") is True:
+                settings["popup_alert_enabled"] = False
+                should_save = True
     except Exception:
         pass
+    if should_save:
+        save_settings(settings)
     return settings
 
 
@@ -594,6 +607,7 @@ class NetworkWatchdogApp:
         self.interval_var = tk.StringVar(value=str(self.settings["interval_seconds"]))
         self.timeout_var = tk.StringVar(value=str(self.settings["timeout_seconds"]))
         self.threshold_var = tk.StringVar(value=str(self.settings["degraded_latency_ms"]))
+        self.min_ok_var = tk.StringVar(value=str(self.settings["minimum_ok_targets"]))
         self.system_threshold_var = tk.StringVar(value=str(self.settings["system_alert_threshold"]))
         self.language_var = tk.StringVar(value="English" if self.language == "en" else TEXT["zh"]["language_name"])
         self.status_var = tk.StringVar()
@@ -646,7 +660,7 @@ class NetworkWatchdogApp:
     def _build_ui(self) -> None:
         top = ttk.Frame(self.root, padding=(10, 8))
         top.pack(fill=tk.X)
-        for column in range(8):
+        for column in range(10):
             top.columnconfigure(column, weight=0)
 
         self.widgets["refresh_label"] = ttk.Label(top)
@@ -661,8 +675,12 @@ class NetworkWatchdogApp:
         self.widgets["degraded_label"].grid(row=0, column=4, sticky="w")
         ttk.Entry(top, textvariable=self.threshold_var, width=8).grid(row=0, column=5, padx=(4, 14))
 
+        self.widgets["min_ok_label"] = ttk.Label(top)
+        self.widgets["min_ok_label"].grid(row=0, column=6, sticky="w")
+        ttk.Entry(top, textvariable=self.min_ok_var, width=6).grid(row=0, column=7, padx=(4, 14))
+
         self.widgets["language_label"] = ttk.Label(top)
-        self.widgets["language_label"].grid(row=0, column=6, sticky="w")
+        self.widgets["language_label"].grid(row=0, column=8, sticky="w")
         language_box = ttk.Combobox(
             top,
             textvariable=self.language_var,
@@ -670,7 +688,7 @@ class NetworkWatchdogApp:
             state="readonly",
             width=10,
         )
-        language_box.grid(row=0, column=7, padx=(4, 0))
+        language_box.grid(row=0, column=9, padx=(4, 0))
         language_box.bind("<<ComboboxSelected>>", self._on_language_changed)
 
         self.widgets["apply_button"] = ttk.Button(top, command=self._apply_settings)
@@ -880,6 +898,7 @@ class NetworkWatchdogApp:
             "refresh_label": "refresh_s",
             "timeout_label": "timeout_s",
             "degraded_label": "degraded_ms",
+            "min_ok_label": "minimum_ok",
             "language_label": "language",
             "apply_button": "apply",
             "refresh_button": "refresh_now",
@@ -1035,6 +1054,7 @@ class NetworkWatchdogApp:
             interval = self._current_interval()
             timeout = self._current_timeout()
             threshold = self._current_threshold()
+            minimum_ok = self._current_min_ok_targets()
             results = []
             ok_count = 0
             latency_values = []
@@ -1049,7 +1069,13 @@ class NetworkWatchdogApp:
 
             avg_latency = int(sum(latency_values) / len(latency_values)) if latency_values else None
             success_rate = round(ok_count / len(self.targets) * 100, 1)
-            summary_state = self._classify_state(ok_count, len(self.targets), avg_latency, threshold)
+            summary_state = self._classify_state(
+                ok_count,
+                len(self.targets),
+                avg_latency,
+                threshold,
+                minimum_ok,
+            )
             system_metrics = collect_system_metrics()
 
             payload = {
@@ -1235,6 +1261,7 @@ class NetworkWatchdogApp:
                 "interval_seconds": self._current_interval(),
                 "timeout_seconds": self._current_timeout(),
                 "degraded_latency_ms": self._current_threshold(),
+                "minimum_ok_targets": self._current_min_ok_targets(),
                 "system_alert_threshold": self._current_system_threshold(),
                 "sound_alert_enabled": self.sound_alert_var.get(),
                 "popup_alert_enabled": self.popup_alert_var.get(),
@@ -1256,6 +1283,7 @@ class NetworkWatchdogApp:
         self.interval_var.set(str(self.settings["interval_seconds"]))
         self.timeout_var.set(str(self.settings["timeout_seconds"]))
         self.threshold_var.set(str(self.settings["degraded_latency_ms"]))
+        self.min_ok_var.set(str(self.settings["minimum_ok_targets"]))
         self.system_threshold_var.set(str(self.settings["system_alert_threshold"]))
         save_settings(self.settings)
         self.next_run_ts = time.time() + self.settings["interval_seconds"]
@@ -1305,10 +1333,12 @@ class NetworkWatchdogApp:
         total_count: int,
         avg_latency: int | None,
         degraded_threshold: int,
+        minimum_ok_targets: int,
     ) -> str:
         if ok_count == 0:
             return "DOWN"
-        if ok_count < total_count:
+        minimum_ok_targets = max(1, min(minimum_ok_targets, total_count))
+        if ok_count < minimum_ok_targets:
             return "DEGRADED"
         if avg_latency is not None and avg_latency >= degraded_threshold:
             return "DEGRADED"
@@ -1656,6 +1686,10 @@ class NetworkWatchdogApp:
 
     def _current_threshold(self) -> int:
         return self._parse_positive_int(self.threshold_var.get(), DEFAULT_DEGRADED_LATENCY_MS)
+
+    def _current_min_ok_targets(self) -> int:
+        value = self._parse_positive_int(self.min_ok_var.get(), DEFAULT_MINIMUM_OK_TARGETS)
+        return max(1, min(value, len(self.targets)))
 
     def _current_system_threshold(self) -> int:
         return self._parse_positive_int(self.system_threshold_var.get(), DEFAULT_SYSTEM_ALERT_THRESHOLD)
