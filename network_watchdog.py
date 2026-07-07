@@ -67,13 +67,14 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_DEGRADED_LATENCY_MS = 1500
 DEFAULT_MINIMUM_OK_TARGETS = 2
 DEFAULT_SYSTEM_ALERT_THRESHOLD = 95
+DEFAULT_SLOW_AVG_LATENCY_ALERT_MS = 2000
 HISTORY_WINDOW_SECONDS = 6 * 60 * 60
 DEFAULT_SMTP_HOST = "smtp.qq.com"
 DEFAULT_SMTP_PORT = 465
@@ -138,6 +139,7 @@ TEXT = {
         "popup_alert": "Popup alert",
         "email_alert": "Email alert",
         "recovery_email": "Recovery email",
+        "slow_latency_alert_ms": "Slow latency alert (ms)",
         "close_to_tray": "Close button hides to tray",
         "smtp_host": "SMTP host",
         "sender_email": "Sender email",
@@ -178,6 +180,8 @@ TEXT = {
         "http_error": "HTTP error {code} - server rejected the request.",
         "system_alert_subject": "SYSTEM_RESOURCE",
         "system_alert_message": "System resource threshold reached: {items}",
+        "slow_network_subject": "SLOW_NETWORK",
+        "slow_network_message": "Network speed is slow / 网速速度变慢. Average latency {latency} ms for 2 consecutive checks.",
     },
     "zh": {
         "language_name": "\u4e2d\u6587",
@@ -227,6 +231,7 @@ TEXT = {
         "popup_alert": "\u5f39\u7a97\u8b66\u62a5",
         "email_alert": "\u90ae\u4ef6\u8b66\u62a5",
         "recovery_email": "\u6062\u590d\u90ae\u4ef6",
+        "slow_latency_alert_ms": "\u6162\u901f\u5ef6\u8fdf\u544a\u8b66(ms)",
         "close_to_tray": "\u5173\u95ed\u6309\u94ae\u9690\u85cf\u5230\u6258\u76d8",
         "smtp_host": "SMTP\u4e3b\u673a",
         "sender_email": "\u53d1\u4ef6\u90ae\u7bb1",
@@ -267,6 +272,8 @@ TEXT = {
         "http_error": "HTTP \u9519\u8bef {code} - \u670d\u52a1\u5668\u62d2\u7edd\u8bf7\u6c42\u3002",
         "system_alert_subject": "\u7cfb\u7edf\u8d44\u6e90\u8b66\u62a5",
         "system_alert_message": "\u7cfb\u7edf\u8d44\u6e90\u8fbe\u5230\u9608\u503c\uff1a{items}",
+        "slow_network_subject": "\u7f51\u901f\u53d8\u6162",
+        "slow_network_message": "\u7f51\u901f\u901f\u5ea6\u53d8\u6162 / Network speed is slow\u3002\u5e73\u5747\u5ef6\u8fdf {latency} ms\uff0c\u5df2\u8fde\u7eed 2 \u6b21\u89e6\u53d1\u9608\u503c\u3002",
     },
 }
 
@@ -332,6 +339,7 @@ def default_settings() -> dict:
         "degraded_latency_ms": DEFAULT_DEGRADED_LATENCY_MS,
         "minimum_ok_targets": DEFAULT_MINIMUM_OK_TARGETS,
         "system_alert_threshold": DEFAULT_SYSTEM_ALERT_THRESHOLD,
+        "slow_avg_latency_alert_ms": DEFAULT_SLOW_AVG_LATENCY_ALERT_MS,
         "sound_alert_enabled": True,
         "popup_alert_enabled": False,
         "email_alert_enabled": False,
@@ -598,6 +606,8 @@ class NetworkWatchdogApp:
         self.manual_refresh_started_at: float | None = None
         self.manual_refresh_pending = False
         self.popup_alert_open = False
+        self.slow_latency_alert_streak = 0
+        self.slow_latency_alert_active = False
 
         self.widgets: dict[str, object] = {}
         self.labels: dict[str, tk.StringVar] = {}
@@ -609,6 +619,7 @@ class NetworkWatchdogApp:
         self.threshold_var = tk.StringVar(value=str(self.settings["degraded_latency_ms"]))
         self.min_ok_var = tk.StringVar(value=str(self.settings["minimum_ok_targets"]))
         self.system_threshold_var = tk.StringVar(value=str(self.settings["system_alert_threshold"]))
+        self.slow_latency_alert_var = tk.StringVar(value=str(self.settings["slow_avg_latency_alert_ms"]))
         self.language_var = tk.StringVar(value="English" if self.language == "en" else TEXT["zh"]["language_name"])
         self.status_var = tk.StringVar()
         self.last_update_var = tk.StringVar()
@@ -821,34 +832,38 @@ class NetworkWatchdogApp:
         self.widgets["system_threshold_label"].grid(row=1, column=2, sticky="w", pady=3)
         ttk.Entry(parent, textvariable=self.system_threshold_var, width=8).grid(row=1, column=3, sticky="w", pady=3)
 
+        self.widgets["slow_latency_alert_label"] = ttk.Label(parent)
+        self.widgets["slow_latency_alert_label"].grid(row=2, column=2, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.slow_latency_alert_var, width=8).grid(row=2, column=3, sticky="w", pady=3)
+
         self.widgets["smtp_host_label"] = ttk.Label(parent)
-        self.widgets["smtp_host_label"].grid(row=2, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.smtp_host_var).grid(row=2, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["smtp_host_label"].grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.smtp_host_var).grid(row=3, column=1, sticky="ew", pady=3, padx=(0, 10))
 
         self.widgets["sender_email_label"] = ttk.Label(parent)
-        self.widgets["sender_email_label"].grid(row=3, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.sender_email_var).grid(row=3, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["sender_email_label"].grid(row=4, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.sender_email_var).grid(row=4, column=1, sticky="ew", pady=3, padx=(0, 10))
         self.widgets["sender_name_label"] = ttk.Label(parent)
-        self.widgets["sender_name_label"].grid(row=3, column=2, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.sender_name_var).grid(row=3, column=3, sticky="ew", pady=3)
+        self.widgets["sender_name_label"].grid(row=4, column=2, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.sender_name_var).grid(row=4, column=3, sticky="ew", pady=3)
 
         self.widgets["smtp_auth_label"] = ttk.Label(parent)
-        self.widgets["smtp_auth_label"].grid(row=4, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.auth_code_var, show="*").grid(row=4, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["smtp_auth_label"].grid(row=5, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.auth_code_var, show="*").grid(row=5, column=1, sticky="ew", pady=3, padx=(0, 10))
 
         for index, var in enumerate(self.recipient_vars):
-            row = 5 + index
+            row = 6 + index
             label_key = f"recipient_{index + 1}"
             self.widgets[f"{label_key}_label"] = ttk.Label(parent)
             self.widgets[f"{label_key}_label"].grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(parent, textvariable=var).grid(row=row, column=1, columnspan=3, sticky="ew", pady=3)
 
         self.widgets["save_button"] = ttk.Button(parent, command=self._apply_settings)
-        self.widgets["save_button"].grid(row=8, column=0, sticky="w", pady=(10, 0))
+        self.widgets["save_button"].grid(row=9, column=0, sticky="w", pady=(10, 0))
         self.widgets["test_sound_button"] = ttk.Button(parent, command=self._play_test_sound)
-        self.widgets["test_sound_button"].grid(row=8, column=1, sticky="w", pady=(10, 0))
+        self.widgets["test_sound_button"].grid(row=9, column=1, sticky="w", pady=(10, 0))
         self.widgets["email_note"] = ttk.Label(parent, wraplength=840, foreground="#475467")
-        self.widgets["email_note"].grid(row=9, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        self.widgets["email_note"].grid(row=10, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
     def _build_history_tab(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(1, weight=1)
@@ -912,6 +927,7 @@ class NetworkWatchdogApp:
             "recovery_check": "recovery_email",
             "tray_check": "close_to_tray",
             "system_threshold_label": "system_summary",
+            "slow_latency_alert_label": "slow_latency_alert_ms",
             "smtp_host_label": "smtp_host",
             "sender_email_label": "sender_email",
             "sender_name_label": "sender_name",
@@ -1201,6 +1217,7 @@ class NetworkWatchdogApp:
             self._record_history_point(payload)
             self._handle_alert_transition(payload)
             self._handle_system_alert(payload)
+            self._handle_slow_latency_alert(payload)
 
             if payload.get("trigger") == "manual":
                 self.manual_refresh_pending = False
@@ -1263,6 +1280,7 @@ class NetworkWatchdogApp:
                 "degraded_latency_ms": self._current_threshold(),
                 "minimum_ok_targets": self._current_min_ok_targets(),
                 "system_alert_threshold": self._current_system_threshold(),
+                "slow_avg_latency_alert_ms": self._current_slow_latency_alert_threshold(),
                 "sound_alert_enabled": self.sound_alert_var.get(),
                 "popup_alert_enabled": self.popup_alert_var.get(),
                 "email_alert_enabled": self.email_alert_var.get(),
@@ -1285,6 +1303,7 @@ class NetworkWatchdogApp:
         self.threshold_var.set(str(self.settings["degraded_latency_ms"]))
         self.min_ok_var.set(str(self.settings["minimum_ok_targets"]))
         self.system_threshold_var.set(str(self.settings["system_alert_threshold"]))
+        self.slow_latency_alert_var.set(str(self.settings["slow_avg_latency_alert_ms"]))
         save_settings(self.settings)
         self.next_run_ts = time.time() + self.settings["interval_seconds"]
         self._add_event_line(self._t("settings_saved"))
@@ -1483,6 +1502,30 @@ class NetworkWatchdogApp:
             ).start()
             self._add_event_line(message)
         self.last_system_alert_active = active
+
+    def _handle_slow_latency_alert(self, payload: dict) -> None:
+        avg_latency = payload.get("avg_latency_ms")
+        threshold = self._current_slow_latency_alert_threshold()
+        if avg_latency is not None and avg_latency >= threshold:
+            self.slow_latency_alert_streak += 1
+        else:
+            self.slow_latency_alert_streak = 0
+            self.slow_latency_alert_active = False
+            return
+
+        if self.slow_latency_alert_streak < 2 or self.slow_latency_alert_active:
+            return
+        if not self.email_alert_var.get():
+            return
+
+        message = self._t("slow_network_message", latency=avg_latency)
+        threading.Thread(
+            target=self._send_email_worker,
+            args=(self._t("slow_network_subject"), message, True),
+            daemon=True,
+        ).start()
+        self._add_event_line(message)
+        self.slow_latency_alert_active = True
 
     def _send_email_worker(self, alert_type: str, message: str, count_as_alert: bool) -> None:
         recipients = self._recipients()
@@ -1693,6 +1736,12 @@ class NetworkWatchdogApp:
 
     def _current_system_threshold(self) -> int:
         return self._parse_positive_int(self.system_threshold_var.get(), DEFAULT_SYSTEM_ALERT_THRESHOLD)
+
+    def _current_slow_latency_alert_threshold(self) -> int:
+        return self._parse_positive_int(
+            self.slow_latency_alert_var.get(),
+            DEFAULT_SLOW_AVG_LATENCY_ALERT_MS,
+        )
 
     def _on_language_changed(self, _event: object = None) -> None:
         selected = self.language_var.get()

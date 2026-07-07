@@ -4,6 +4,7 @@
   "degraded_latency_ms": 1500,
   "minimum_ok_targets": 2,
   "system_alert_threshold": 95,
+  "slow_avg_latency_alert_ms": 2000,
   "sound_alert_enabled": true,
   "popup_alert_enabled": false,
   "email_alert_enabled": false,
