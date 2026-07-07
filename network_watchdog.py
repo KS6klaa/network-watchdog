@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import ctypes
 import importlib
 import importlib.util
 import json
@@ -66,7 +67,8 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
+APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_DEGRADED_LATENCY_MS = 1500
@@ -119,6 +121,8 @@ TEXT = {
         "manual_done": "Manual refresh completed at {time}. Latency updated.",
         "next_not_scheduled": "Next update: not scheduled",
         "next_in": "Next update: in {seconds} seconds",
+        "already_running": "Network Watchdog is already running.",
+        "popup_skipped": "Popup alert skipped because another alert window is already open.",
         "last_not_started": "Last update: not started",
         "last_update": "Last update: {time}",
         "avg_latency": "avg latency",
@@ -205,6 +209,8 @@ TEXT = {
         "manual_done": "\u624b\u52a8\u5237\u65b0\u5df2\u5b8c\u6210\uff1a{time}\uff0c\u5ef6\u8fdf\u5df2\u66f4\u65b0\u3002",
         "next_not_scheduled": "\u4e0b\u6b21\u5237\u65b0\uff1a\u672a\u5b89\u6392",
         "next_in": "\u4e0b\u6b21\u5237\u65b0\uff1a{seconds} \u79d2\u540e",
+        "already_running": "\u7f51\u7edc\u770b\u95e8\u72d7\u5df2\u7ecf\u5728\u8fd0\u884c\u3002",
+        "popup_skipped": "\u7531\u4e8e\u53e6\u4e00\u4e2a\u544a\u8b66\u7a97\u53e3\u5df2\u6253\u5f00\uff0c\u672c\u6b21\u5f39\u7a97\u5df2\u8df3\u8fc7\u3002",
         "last_not_started": "\u4e0a\u6b21\u5237\u65b0\uff1a\u672a\u5f00\u59cb",
         "last_update": "\u4e0a\u6b21\u5237\u65b0\uff1a{time}",
         "avg_latency": "\u5e73\u5747\u5ef6\u8fdf",
@@ -282,7 +288,7 @@ DEFAULT_TARGETS = [
     ProbeTarget("Amazon", "https://www.amazon.com/"),
     ProbeTarget("AWS", "https://aws.amazon.com/"),
     ProbeTarget("YouTube", "https://www.youtube.com/generate_204"),
-    ProbeTarget("Cloudflare", "https://www.cloudflare.com/"),
+    ProbeTarget("Cloudflare", "https://www.cloudflare.com/cdn-cgi/trace"),
 ]
 
 
@@ -506,6 +512,22 @@ def create_https_ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
+def acquire_single_instance_mutex() -> object | None:
+    if platform.system() != "Windows":
+        return object()
+    try:
+        kernel32 = ctypes.windll.kernel32
+        mutex = kernel32.CreateMutexW(None, False, APP_MUTEX_NAME)
+        if not mutex:
+            return object()
+        if kernel32.GetLastError() == 183:
+            kernel32.CloseHandle(mutex)
+            return None
+        return mutex
+    except Exception:
+        return object()
+
+
 def describe_http_status(code: int, language: str) -> str:
     if code == 200:
         return tr(language, "http_200")
@@ -562,6 +584,7 @@ class NetworkWatchdogApp:
         self.event_lines: list[str] = []
         self.manual_refresh_started_at: float | None = None
         self.manual_refresh_pending = False
+        self.popup_alert_open = False
 
         self.widgets: dict[str, object] = {}
         self.labels: dict[str, tk.StringVar] = {}
@@ -1376,7 +1399,7 @@ class NetworkWatchdogApp:
             if self.sound_alert_var.get():
                 self._play_alert_sound()
             if self.popup_alert_var.get():
-                self.root.after(0, lambda: messagebox.showwarning(APP_TITLE, message))
+                self.root.after(0, lambda: self._show_alert_popup(message))
             if self.email_alert_var.get():
                 threading.Thread(
                     target=self._send_email_worker,
@@ -1395,6 +1418,18 @@ class NetworkWatchdogApp:
                 daemon=True,
             ).start()
         self.last_alert_state = current_state
+
+    def _show_alert_popup(self, message: str) -> None:
+        if messagebox is None:
+            return
+        if self.popup_alert_open:
+            self._add_event_line(self._t("popup_skipped"))
+            return
+        self.popup_alert_open = True
+        try:
+            messagebox.showwarning(APP_TITLE, message)
+        finally:
+            self.popup_alert_open = False
 
     def _handle_system_alert(self, payload: dict) -> None:
         metrics = payload.get("system_metrics", {})
@@ -1697,13 +1732,33 @@ def main() -> None:
         input("Press Enter to exit...")
         return
 
+    mutex_handle = acquire_single_instance_mutex()
+    if mutex_handle is None:
+        if tk is not None and messagebox is not None:
+            temp_root = tk.Tk()
+            temp_root.withdraw()
+            try:
+                messagebox.showinfo(APP_TITLE, tr("en", "already_running"))
+            finally:
+                temp_root.destroy()
+        else:
+            print("Network Watchdog is already running.")
+        return
+
     root = tk.Tk()
     style = ttk.Style()
     if "vista" in style.theme_names():
         style.theme_use("vista")
     style.configure("TNotebook.Tab", padding=(18, 8), font=("Segoe UI", 10, "bold"))
     NetworkWatchdogApp(root)
-    root.mainloop()
+    try:
+        root.mainloop()
+    finally:
+        if platform.system() == "Windows" and isinstance(mutex_handle, int):
+            try:
+                ctypes.windll.kernel32.CloseHandle(mutex_handle)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
