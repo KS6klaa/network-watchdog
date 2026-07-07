@@ -9,6 +9,7 @@
   "popup_alert_enabled": false,
   "email_alert_enabled": false,
   "recovery_email_enabled": true,
+  "auto_check_updates_enabled": true,
   "minimize_to_tray_on_close": true,
   "language": "en",
   "smtp_host": "smtp.qq.com",

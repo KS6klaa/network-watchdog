@@ -1,6 +1,6 @@
 # Network Watchdog / VPN Coffee Companion
 
-Current stable version: `1.0.9`
+Current stable version: `1.1.0`
 
 Windows 10 / 11 desktop watchdog for checking whether the local machine can reach selected external websites over real HTTPS requests, while also tracking local CPU, memory, and C drive usage.
 
@@ -73,6 +73,7 @@ It is designed for this workflow:
 - `Email`: SMTP settings, alert settings, test email, language switch, system alert threshold
 - `History`: larger 6-hour chart
 - `Environment`: dependency checks and portable setup hints
+- `Updates`: current version, latest GitHub release, package list, and download links
 
 ## Run From Source
 
@@ -118,6 +119,12 @@ The runtime package uses PyInstaller `onedir` mode instead of `onefile` mode to 
 - `Lite`: does not include Python, much smaller, best when the target machine already has Python 3.10+ or when you want to install dependencies locally with `install_lite.bat`
 
 ## Release Notes
+
+### v1.1.0
+
+- Added a dedicated `Updates` page
+- Checks the latest GitHub release, shows current vs latest version, lists downloadable packages, and can open the release page or a selected asset
+- Added an option to check for updates automatically on startup
 
 ### v1.0.9
 

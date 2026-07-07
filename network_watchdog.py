@@ -12,6 +12,7 @@ import platform
 import sys
 import threading
 import time
+import webbrowser
 from dataclasses import dataclass
 from datetime import date, datetime
 from email.message import EmailMessage
@@ -67,8 +68,11 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.1.0"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
+GITHUB_REPO = "KS6klaa/network-watchdog"
+LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
 DEFAULT_DEGRADED_LATENCY_MS = 1500
@@ -107,6 +111,7 @@ TEXT = {
         "email": "Email",
         "history": "History",
         "environment": "Environment",
+        "updates": "Updates",
         "target": "Target",
         "status": "Status",
         "latency": "Latency",
@@ -155,6 +160,23 @@ TEXT = {
         ),
         "env_recheck": "Recheck environment",
         "env_note": "Missing optional items only disable the related feature.",
+        "check_updates_now": "Check updates now",
+        "open_release_page": "Open release page",
+        "update_open_download": "Open selected download",
+        "auto_update_check": "Check updates on startup",
+        "current_version": "Current version",
+        "latest_version": "Latest version",
+        "published_at": "Published at",
+        "update_status": "Update status",
+        "asset_name": "Package",
+        "asset_size": "Size",
+        "asset_url": "Download",
+        "update_idle": "Update check has not run yet.",
+        "update_checking": "Checking GitHub release...",
+        "update_up_to_date": "You are using the latest version.",
+        "update_available": "Update available: {version}",
+        "update_failed": "Update check failed: {error}",
+        "update_no_selection": "Select a package first.",
         "portable_commands": "Portable setup commands",
         "item": "Item",
         "required": "Required",
@@ -201,6 +223,7 @@ TEXT = {
         "email": "\u90ae\u4ef6",
         "history": "\u5386\u53f2",
         "environment": "\u73af\u5883",
+        "updates": "\u66f4\u65b0",
         "target": "\u76ee\u6807",
         "status": "\u72b6\u6001",
         "latency": "\u5ef6\u8fdf",
@@ -249,6 +272,23 @@ TEXT = {
         ),
         "env_recheck": "\u91cd\u65b0\u68c0\u67e5\u73af\u5883",
         "env_note": "\u7f3a\u5c11\u53ef\u9009\u9879\u53ea\u4f1a\u7981\u7528\u76f8\u5173\u529f\u80fd\u3002",
+        "check_updates_now": "\u7acb\u5373\u68c0\u67e5\u66f4\u65b0",
+        "open_release_page": "\u6253\u5f00\u53d1\u5e03\u9875",
+        "update_open_download": "\u6253\u5f00\u6240\u9009\u4e0b\u8f7d",
+        "auto_update_check": "\u542f\u52a8\u65f6\u81ea\u52a8\u68c0\u67e5\u66f4\u65b0",
+        "current_version": "\u5f53\u524d\u7248\u672c",
+        "latest_version": "\u6700\u65b0\u7248\u672c",
+        "published_at": "\u53d1\u5e03\u65f6\u95f4",
+        "update_status": "\u66f4\u65b0\u72b6\u6001",
+        "asset_name": "\u5305\u540d",
+        "asset_size": "\u5927\u5c0f",
+        "asset_url": "\u4e0b\u8f7d",
+        "update_idle": "\u8fd8\u672a\u6267\u884c\u66f4\u65b0\u68c0\u67e5\u3002",
+        "update_checking": "\u6b63\u5728\u68c0\u67e5 GitHub \u6700\u65b0\u7248\u672c...",
+        "update_up_to_date": "\u5f53\u524d\u5df2\u662f\u6700\u65b0\u7248\u672c\u3002",
+        "update_available": "\u53d1\u73b0\u65b0\u7248\u672c\uff1a{version}",
+        "update_failed": "\u66f4\u65b0\u68c0\u67e5\u5931\u8d25\uff1a{error}",
+        "update_no_selection": "\u8bf7\u5148\u9009\u62e9\u4e00\u4e2a\u5b89\u88c5\u5305\u3002",
         "portable_commands": "\u79fb\u52a8\u90e8\u7f72\u547d\u4ee4",
         "item": "\u9879\u76ee",
         "required": "\u5fc5\u9700",
@@ -348,6 +388,7 @@ def default_settings() -> dict:
         "popup_alert_enabled": False,
         "email_alert_enabled": False,
         "recovery_email_enabled": True,
+        "auto_check_updates_enabled": True,
         "minimize_to_tray_on_close": True,
         "language": "en",
         "smtp_host": DEFAULT_SMTP_HOST,
@@ -375,6 +416,9 @@ def load_settings() -> dict:
             settings.update(saved)
             if "minimum_ok_targets" not in saved:
                 settings["minimum_ok_targets"] = DEFAULT_MINIMUM_OK_TARGETS
+                should_save = True
+            if "auto_check_updates_enabled" not in saved:
+                settings["auto_check_updates_enabled"] = True
                 should_save = True
             if saved.get("popup_alert_enabled") is True:
                 settings["popup_alert_enabled"] = False
@@ -537,6 +581,29 @@ def create_https_ssl_context() -> ssl.SSLContext:
     return ssl.create_default_context()
 
 
+def parse_version_tag(value: str) -> tuple[int, ...]:
+    cleaned = value.strip().lower().lstrip("v")
+    parts = []
+    for piece in cleaned.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def format_size_bytes(size: int | None) -> str:
+    if not isinstance(size, int) or size < 0:
+        return "-"
+    units = ["B", "KB", "MB", "GB"]
+    value = float(size)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
 def acquire_single_instance_mutex() -> object | None:
     if platform.system() != "Windows":
         return object()
@@ -594,6 +661,7 @@ class NetworkWatchdogApp:
 
         self.command_queue: queue.Queue[str] = queue.Queue()
         self.results_queue: queue.Queue[dict] = queue.Queue()
+        self.update_queue: queue.Queue[dict] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker_thread: threading.Thread | None = None
         self.tray_icon = None
@@ -612,6 +680,8 @@ class NetworkWatchdogApp:
         self.popup_alert_open = False
         self.slow_latency_alert_streak = 0
         self.slow_latency_alert_active = False
+        self.update_check_in_progress = False
+        self.latest_release_info: dict | None = None
 
         self.widgets: dict[str, object] = {}
         self.labels: dict[str, tk.StringVar] = {}
@@ -631,11 +701,16 @@ class NetworkWatchdogApp:
         self.manual_refresh_var = tk.StringVar()
         self.system_status_var = tk.StringVar()
         self.email_alert_count_var = tk.StringVar()
+        self.current_version_var = tk.StringVar(value=f"v{APP_VERSION}")
+        self.latest_version_var = tk.StringVar(value="-")
+        self.update_published_var = tk.StringVar(value="-")
+        self.update_status_var = tk.StringVar()
 
         self.sound_alert_var = tk.BooleanVar(value=bool(self.settings["sound_alert_enabled"]))
         self.popup_alert_var = tk.BooleanVar(value=bool(self.settings["popup_alert_enabled"]))
         self.email_alert_var = tk.BooleanVar(value=bool(self.settings["email_alert_enabled"]))
         self.recovery_email_var = tk.BooleanVar(value=bool(self.settings["recovery_email_enabled"]))
+        self.auto_update_check_var = tk.BooleanVar(value=bool(self.settings["auto_check_updates_enabled"]))
         self.minimize_on_close_var = tk.BooleanVar(
             value=bool(self.settings["minimize_to_tray_on_close"]) and self.tray_available
         )
@@ -661,6 +736,9 @@ class NetworkWatchdogApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self.root.bind("<Unmap>", self._on_minimize_event)
         self.root.after(800, self._show_environment_startup_notice)
+        self.update_status_var.set(self._t("update_idle"))
+        if self.auto_update_check_var.get():
+            self.root.after(1800, self._check_updates_now)
 
     def _t(self, key: str, **kwargs: object) -> str:
         return tr(self.language, key, **kwargs)
@@ -732,7 +810,7 @@ class NetworkWatchdogApp:
         nav.pack(fill=tk.X)
         self.widgets["nav_frame"] = nav
         self.nav_buttons = []
-        for index, key in enumerate(("dashboard", "email", "history", "environment")):
+        for index, key in enumerate(("dashboard", "email", "history", "environment", "updates")):
             button = tk.Button(
                 nav,
                 relief=tk.FLAT,
@@ -753,11 +831,13 @@ class NetworkWatchdogApp:
         email_tab = ttk.Frame(self.notebook, padding=8)
         history_tab = ttk.Frame(self.notebook, padding=8)
         environment_tab = ttk.Frame(self.notebook, padding=8)
+        updates_tab = ttk.Frame(self.notebook, padding=8)
         self.notebook_tabs = [
             (dashboard_tab, "dashboard"),
             (email_tab, "email"),
             (history_tab, "history"),
             (environment_tab, "environment"),
+            (updates_tab, "updates"),
         ]
         for tab, key in self.notebook_tabs:
             self.notebook.add(tab, text=self._t(key))
@@ -766,6 +846,7 @@ class NetworkWatchdogApp:
         self._build_email_tab(email_tab)
         self._build_history_tab(history_tab)
         self._build_environment_tab(environment_tab)
+        self._build_updates_tab(updates_tab)
         self._update_nav_state()
 
     def _build_dashboard_tab(self, parent: ttk.Frame) -> None:
@@ -912,6 +993,55 @@ class NetworkWatchdogApp:
         self.install_hint_var = tk.StringVar()
         ttk.Label(install_box, textvariable=self.install_hint_var, wraplength=860, foreground="#344054").pack(anchor=tk.W)
 
+    def _build_updates_tab(self, parent: ttk.Frame) -> None:
+        parent.columnconfigure(1, weight=1)
+        parent.rowconfigure(4, weight=1)
+
+        self.widgets["current_version_label"] = ttk.Label(parent)
+        self.widgets["current_version_label"].grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Label(parent, textvariable=self.current_version_var).grid(row=0, column=1, sticky="w", pady=3)
+
+        self.widgets["latest_version_label"] = ttk.Label(parent)
+        self.widgets["latest_version_label"].grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(parent, textvariable=self.latest_version_var).grid(row=1, column=1, sticky="w", pady=3)
+
+        self.widgets["published_at_label"] = ttk.Label(parent)
+        self.widgets["published_at_label"].grid(row=2, column=0, sticky="w", pady=3)
+        ttk.Label(parent, textvariable=self.update_published_var).grid(row=2, column=1, sticky="w", pady=3)
+
+        self.widgets["update_status_label"] = ttk.Label(parent)
+        self.widgets["update_status_label"].grid(row=3, column=0, sticky="w", pady=3)
+        ttk.Label(parent, textvariable=self.update_status_var, foreground="#175cd3").grid(
+            row=3, column=1, sticky="w", pady=3
+        )
+
+        self.update_assets_tree = ttk.Treeview(
+            parent,
+            columns=("name", "size", "url"),
+            show="headings",
+            height=8,
+        )
+        self.update_assets_tree.grid(row=4, column=0, columnspan=2, sticky="nsew", pady=(6, 8))
+        self.update_assets_tree.column("name", width=260, anchor=tk.W)
+        self.update_assets_tree.column("size", width=90, anchor=tk.CENTER)
+        self.update_assets_tree.column("url", width=420, anchor=tk.W)
+
+        actions = ttk.Frame(parent)
+        actions.grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 0))
+        self.widgets["check_updates_button"] = ttk.Button(actions, command=self._check_updates_now)
+        self.widgets["check_updates_button"].pack(side=tk.LEFT)
+        self.widgets["open_release_button"] = ttk.Button(actions, command=lambda: webbrowser.open(RELEASES_PAGE_URL))
+        self.widgets["open_release_button"].pack(side=tk.LEFT, padx=(8, 0))
+        self.widgets["open_update_download_button"] = ttk.Button(actions, command=self._open_selected_update_download)
+        self.widgets["open_update_download_button"].pack(side=tk.LEFT, padx=(8, 0))
+
+        self.widgets["auto_update_check_box"] = ttk.Checkbutton(
+            parent,
+            variable=self.auto_update_check_var,
+            command=self._apply_settings,
+        )
+        self.widgets["auto_update_check_box"].grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
     def _refresh_language_text(self) -> None:
         text_map = {
             "refresh_label": "refresh_s",
@@ -945,6 +1075,14 @@ class NetworkWatchdogApp:
             "history_chart_label": "small_chart",
             "env_recheck_button": "env_recheck",
             "env_note": "env_note",
+            "current_version_label": "current_version",
+            "latest_version_label": "latest_version",
+            "published_at_label": "published_at",
+            "update_status_label": "update_status",
+            "check_updates_button": "check_updates_now",
+            "open_release_button": "open_release_page",
+            "open_update_download_button": "update_open_download",
+            "auto_update_check_box": "auto_update_check",
         }
         for widget_key, text_key in text_map.items():
             widget = self.widgets.get(widget_key)
@@ -983,6 +1121,15 @@ class NetworkWatchdogApp:
             }
             for column, key in headings.items():
                 self.environment_tree.heading(column, text=self._t(key))
+
+        if hasattr(self, "update_assets_tree"):
+            headings = {
+                "name": "asset_name",
+                "size": "asset_size",
+                "url": "asset_url",
+            }
+            for column, key in headings.items():
+                self.update_assets_tree.heading(column, text=self._t(key))
 
         if self.latest_batch:
             self._update_summary_labels(self.latest_batch)
@@ -1231,6 +1378,13 @@ class NetworkWatchdogApp:
                 )
                 self._add_event_line(self.manual_refresh_var.get())
 
+        while True:
+            try:
+                update_payload = self.update_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._apply_update_payload(update_payload)
+
         self.root.after(300, self._poll_results)
 
     def _localized_result_detail(self, result: dict) -> str:
@@ -1289,6 +1443,7 @@ class NetworkWatchdogApp:
                 "popup_alert_enabled": self.popup_alert_var.get(),
                 "email_alert_enabled": self.email_alert_var.get(),
                 "recovery_email_enabled": self.recovery_email_var.get(),
+                "auto_check_updates_enabled": self.auto_update_check_var.get(),
                 "minimize_to_tray_on_close": self.minimize_on_close_var.get(),
                 "language": self.language,
                 "smtp_host": self.smtp_host_var.get().strip() or DEFAULT_SMTP_HOST,
@@ -1539,6 +1694,77 @@ class NetworkWatchdogApp:
         ).start()
         self._add_event_line(message)
         self.slow_latency_alert_active = True
+
+    def _check_updates_now(self) -> None:
+        if self.update_check_in_progress:
+            return
+        self.update_check_in_progress = True
+        self.update_status_var.set(self._t("update_checking"))
+        threading.Thread(target=self._update_check_worker, daemon=True).start()
+
+    def _update_check_worker(self) -> None:
+        req = request.Request(
+            LATEST_RELEASE_API,
+            headers={
+                "User-Agent": f"network-watchdog/{APP_VERSION}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        try:
+            context = create_https_ssl_context()
+            with request.urlopen(req, timeout=15, context=context) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            self.update_queue.put({"type": "release", "ok": True, "payload": payload})
+        except Exception as exc:
+            self.update_queue.put({"type": "release", "ok": False, "error": str(exc)})
+
+    def _apply_update_payload(self, payload: dict) -> None:
+        self.update_check_in_progress = False
+        if not payload.get("ok"):
+            self.update_status_var.set(self._t("update_failed", error=payload.get("error", "unknown error")))
+            return
+
+        release = payload["payload"]
+        self.latest_release_info = release
+        tag_name = str(release.get("tag_name", "")).strip() or "-"
+        self.latest_version_var.set(tag_name)
+        self.update_published_var.set(str(release.get("published_at", "-")))
+
+        current_version = parse_version_tag(APP_VERSION)
+        latest_version = parse_version_tag(tag_name)
+        if latest_version > current_version:
+            self.update_status_var.set(self._t("update_available", version=tag_name))
+            self._add_event_line(f"Update available: {tag_name}")
+        else:
+            self.update_status_var.set(self._t("update_up_to_date"))
+
+        if hasattr(self, "update_assets_tree"):
+            for item_id in self.update_assets_tree.get_children():
+                self.update_assets_tree.delete(item_id)
+            for asset in release.get("assets", []):
+                self.update_assets_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        asset.get("name", "-"),
+                        format_size_bytes(asset.get("size")),
+                        asset.get("browser_download_url", "-"),
+                    ),
+                )
+
+    def _open_selected_update_download(self) -> None:
+        if not hasattr(self, "update_assets_tree"):
+            return
+        selected = self.update_assets_tree.selection()
+        if not selected:
+            self.status_var.set(self._t("update_no_selection"))
+            return
+        values = self.update_assets_tree.item(selected[0], "values")
+        if len(values) < 3:
+            return
+        url = str(values[2]).strip()
+        if url and url != "-":
+            webbrowser.open(url)
 
     def _send_email_worker(self, alert_type: str, message: str, count_as_alert: bool) -> None:
         recipients = self._recipients()
