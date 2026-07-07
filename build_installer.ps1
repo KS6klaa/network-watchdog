@@ -5,6 +5,8 @@ $releaseRoot = Join-Path $root "release"
 $installerRoot = Join-Path $releaseRoot "NetworkWatchdogInstaller"
 $appBundle = Join-Path $installerRoot "NetworkWatchdog"
 $zipPath = Join-Path $releaseRoot "NetworkWatchdogInstaller.zip"
+$liteRoot = Join-Path $releaseRoot "NetworkWatchdogLite"
+$liteZipPath = Join-Path $releaseRoot "NetworkWatchdogLite.zip"
 $setupBuildRoot = Join-Path $releaseRoot "SetupBuild"
 $payloadZip = Join-Path $setupBuildRoot "install_payload.zip"
 $setupScript = Join-Path $setupBuildRoot "install_from_payload.ps1"
@@ -24,6 +26,12 @@ if (Test-Path $installerRoot) {
 }
 if (Test-Path $zipPath) {
     Remove-Item -Force $zipPath
+}
+if (Test-Path $liteRoot) {
+    Remove-Item -Recurse -Force $liteRoot
+}
+if (Test-Path $liteZipPath) {
+    Remove-Item -Force $liteZipPath
 }
 if (Test-Path $setupBuildRoot) {
     Remove-Item -Recurse -Force $setupBuildRoot
@@ -49,6 +57,15 @@ Copy-Item -Force (Join-Path $root "packaging\install.bat") (Join-Path $installer
 Copy-Item -Force (Join-Path $root "packaging\uninstall.bat") (Join-Path $installerRoot "uninstall.bat")
 
 Compress-Archive -Path (Join-Path $installerRoot "*") -DestinationPath $zipPath -Force
+
+New-Item -ItemType Directory -Force $liteRoot | Out-Null
+Copy-Item -Force (Join-Path $root "network_watchdog.py") (Join-Path $liteRoot "network_watchdog.py")
+Copy-Item -Force (Join-Path $root "requirements.txt") (Join-Path $liteRoot "requirements.txt")
+Copy-Item -Force (Join-Path $root "watchdog_targets.json") (Join-Path $liteRoot "watchdog_targets.json")
+Copy-Item -Force (Join-Path $root "packaging\default_watchdog_settings.json") (Join-Path $liteRoot "watchdog_settings.json")
+Copy-Item -Force (Join-Path $root "README.md") (Join-Path $liteRoot "README.md")
+Copy-Item -Force (Join-Path $root "packaging\install_lite.bat") (Join-Path $liteRoot "install_lite.bat")
+Compress-Archive -Path (Join-Path $liteRoot "*") -DestinationPath $liteZipPath -Force
 
 New-Item -ItemType Directory -Force $setupBuildRoot | Out-Null
 Compress-Archive -Path $appBundle -DestinationPath $payloadZip -Force
@@ -92,4 +109,5 @@ iexpress.exe /N /Q $sedPath | Out-Null
 
 Write-Host "Installer package created:"
 Write-Host $zipPath
+Write-Host $liteZipPath
 Write-Host $setupExePath

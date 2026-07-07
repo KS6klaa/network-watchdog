@@ -1,6 +1,6 @@
 # Network Watchdog / VPN Coffee Companion
 
-Current stable version: `1.0.5`
+Current stable version: `1.0.6`
 
 Windows 10 / 11 desktop watchdog for checking whether the local machine can reach selected external websites over real HTTPS requests, while also tracking local CPU, memory, and C drive usage.
 
@@ -106,10 +106,22 @@ Output files:
 
 - `release/SetupNetworkWatchdog.exe`
 - `release/NetworkWatchdogInstaller.zip`
+- `release/NetworkWatchdogLite.zip`
 
 The runtime package uses PyInstaller `onedir` mode instead of `onefile` mode to reduce antivirus false positives.
 
+## Package Types
+
+- `Full`: includes the private Python runtime and desktop dependencies, larger size, best for direct installation on another Windows 10 / 11 machine
+- `Lite`: does not include Python, much smaller, best when the target machine already has Python 3.10+ or when you want to install dependencies locally with `install_lite.bat`
+
 ## Release Notes
+
+### v1.0.6
+
+- Added a second lightweight release package without the bundled Python runtime
+- Kept the existing full installer package for direct deployment on another machine
+- Added `install_lite.bat` so the lightweight package can create its own local virtual environment
 
 ### v1.0.5
 

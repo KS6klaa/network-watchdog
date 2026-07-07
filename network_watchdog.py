@@ -67,7 +67,7 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
