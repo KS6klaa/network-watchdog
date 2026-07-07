@@ -68,7 +68,7 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 GITHUB_REPO = "KS6klaa/network-watchdog"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -79,6 +79,9 @@ DEFAULT_DEGRADED_LATENCY_MS = 1500
 DEFAULT_MINIMUM_OK_TARGETS = 2
 DEFAULT_SYSTEM_ALERT_THRESHOLD = 95
 DEFAULT_SLOW_AVG_LATENCY_ALERT_MS = 2000
+DEFAULT_DOWN_ALERT_STREAK = 2
+DEFAULT_SLOW_ALERT_STREAK = 3
+DEFAULT_SYSTEM_ALERT_STREAK = 2
 HISTORY_WINDOW_SECONDS = 6 * 60 * 60
 DEFAULT_SMTP_HOST = "smtp.qq.com"
 DEFAULT_SMTP_PORT = 465
@@ -387,7 +390,7 @@ def default_settings() -> dict:
         "sound_alert_enabled": True,
         "popup_alert_enabled": False,
         "email_alert_enabled": False,
-        "recovery_email_enabled": True,
+        "recovery_email_enabled": False,
         "auto_check_updates_enabled": True,
         "minimize_to_tray_on_close": True,
         "language": "en",
@@ -419,6 +422,9 @@ def load_settings() -> dict:
                 should_save = True
             if "auto_check_updates_enabled" not in saved:
                 settings["auto_check_updates_enabled"] = True
+                should_save = True
+            if saved.get("recovery_email_enabled") is True:
+                settings["recovery_email_enabled"] = False
                 should_save = True
             if saved.get("popup_alert_enabled") is True:
                 settings["popup_alert_enabled"] = False
@@ -678,6 +684,9 @@ class NetworkWatchdogApp:
         self.manual_refresh_started_at: float | None = None
         self.manual_refresh_pending = False
         self.popup_alert_open = False
+        self.down_alert_streak = 0
+        self.down_alert_active = False
+        self.system_alert_streak = 0
         self.slow_latency_alert_streak = 0
         self.slow_latency_alert_active = False
         self.update_check_in_progress = False
@@ -907,6 +916,7 @@ class NetworkWatchdogApp:
         self.widgets["email_check"].grid(row=0, column=2, sticky="w", pady=3)
         self.widgets["recovery_check"] = ttk.Checkbutton(parent, variable=self.recovery_email_var)
         self.widgets["recovery_check"].grid(row=0, column=3, sticky="w", pady=3)
+        self.widgets["recovery_check"].state(["disabled"])
 
         self.widgets["tray_check"] = ttk.Checkbutton(parent, variable=self.minimize_on_close_var)
         self.widgets["tray_check"].grid(row=1, column=0, columnspan=2, sticky="w", pady=3)
@@ -1367,6 +1377,7 @@ class NetworkWatchdogApp:
             self.next_run_ts = time.time() + payload["interval"]
             self._record_history_point(payload)
             self._handle_alert_transition(payload)
+            self._handle_down_alert(payload)
             self._handle_system_alert(payload)
             self._handle_slow_latency_alert(payload)
 
@@ -1609,31 +1620,11 @@ class NetworkWatchdogApp:
                 self._play_alert_sound()
             if self.popup_alert_var.get():
                 self.root.after(0, lambda: self._show_alert_popup(message))
-            if self.email_alert_var.get():
-                threading.Thread(
-                    target=self._send_email_worker,
-                    args=(current_state, message, True),
-                    daemon=True,
-                ).start()
             if self.tray_icon is not None:
                 try:
                     self.tray_icon.notify(message, APP_TITLE)
                 except Exception:
                     pass
-        elif current_state == "NORMAL" and self.recovery_email_var.get() and self.email_alert_var.get():
-            recovery_message = self._t(
-                "recovery_message",
-                ok_count=payload["ok_count"],
-                total_count=payload["total_count"],
-                minimum_ok=self._current_min_ok_targets(),
-                success_rate=payload["success_rate"],
-                latency=latency_text,
-            )
-            threading.Thread(
-                target=self._send_email_worker,
-                args=(self._t("recovery_subject"), recovery_message, False),
-                daemon=True,
-            ).start()
         self.last_alert_state = current_state
 
     def _show_alert_popup(self, message: str) -> None:
@@ -1648,6 +1639,32 @@ class NetworkWatchdogApp:
         finally:
             self.popup_alert_open = False
 
+    def _handle_down_alert(self, payload: dict) -> None:
+        if payload.get("summary_state") == "DOWN":
+            self.down_alert_streak += 1
+        else:
+            self.down_alert_streak = 0
+            self.down_alert_active = False
+            return
+
+        if self.down_alert_streak < DEFAULT_DOWN_ALERT_STREAK or self.down_alert_active:
+            return
+        if not self.email_alert_var.get():
+            return
+
+        message = (
+            f"All configured targets are unreachable. "
+            f"Down streak {self.down_alert_streak}, success rate {payload['success_rate']}%, "
+            f"average latency {payload['avg_latency_ms'] if payload['avg_latency_ms'] is not None else '-'} ms."
+        )
+        threading.Thread(
+            target=self._send_email_worker,
+            args=("DOWN", message, True),
+            daemon=True,
+        ).start()
+        self._add_event_line(message)
+        self.down_alert_active = True
+
     def _handle_system_alert(self, payload: dict) -> None:
         metrics = payload.get("system_metrics", {})
         if not metrics.get("available"):
@@ -1661,7 +1678,19 @@ class NetworkWatchdogApp:
         if metrics["disk_c"] >= threshold:
             high_items.append(f"C drive {metrics['disk_c']}%")
         active = bool(high_items)
-        if active and not self.last_system_alert_active and self.email_alert_var.get():
+        if active:
+            self.system_alert_streak += 1
+        else:
+            self.system_alert_streak = 0
+            self.last_system_alert_active = False
+            return
+
+        if (
+            active
+            and not self.last_system_alert_active
+            and self.system_alert_streak >= DEFAULT_SYSTEM_ALERT_STREAK
+            and self.email_alert_var.get()
+        ):
             message = self._t("system_alert_message", items=", ".join(high_items))
             threading.Thread(
                 target=self._send_email_worker,
@@ -1681,7 +1710,7 @@ class NetworkWatchdogApp:
             self.slow_latency_alert_active = False
             return
 
-        if self.slow_latency_alert_streak < 2 or self.slow_latency_alert_active:
+        if self.slow_latency_alert_streak < DEFAULT_SLOW_ALERT_STREAK or self.slow_latency_alert_active:
             return
         if not self.email_alert_var.get():
             return
