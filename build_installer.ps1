@@ -7,6 +7,11 @@ $appBundle = Join-Path $installerRoot "NetworkWatchdog"
 $zipPath = Join-Path $releaseRoot "NetworkWatchdogInstaller.zip"
 $liteRoot = Join-Path $releaseRoot "NetworkWatchdogLite"
 $liteZipPath = Join-Path $releaseRoot "NetworkWatchdogLite.zip"
+$semiLiteSetupBuildRoot = Join-Path $releaseRoot "SemiLiteSetupBuild"
+$semiLitePayloadZip = Join-Path $semiLiteSetupBuildRoot "lite_payload.zip"
+$semiLiteSetupScript = Join-Path $semiLiteSetupBuildRoot "install_lite_payload.ps1"
+$semiLiteSedPath = Join-Path $semiLiteSetupBuildRoot "NetworkWatchdogSemiLiteSetup.sed"
+$semiLiteExePath = Join-Path $releaseRoot "SetupNetworkWatchdogLite.exe"
 $setupBuildRoot = Join-Path $releaseRoot "SetupBuild"
 $payloadZip = Join-Path $setupBuildRoot "install_payload.zip"
 $setupScript = Join-Path $setupBuildRoot "install_from_payload.ps1"
@@ -33,11 +38,17 @@ if (Test-Path $liteRoot) {
 if (Test-Path $liteZipPath) {
     Remove-Item -Force $liteZipPath
 }
+if (Test-Path $semiLiteSetupBuildRoot) {
+    Remove-Item -Recurse -Force $semiLiteSetupBuildRoot
+}
 if (Test-Path $setupBuildRoot) {
     Remove-Item -Recurse -Force $setupBuildRoot
 }
 if (Test-Path $setupExePath) {
     Remove-Item -Force $setupExePath
+}
+if (Test-Path $semiLiteExePath) {
+    Remove-Item -Force $semiLiteExePath
 }
 
 python -m PyInstaller `
@@ -66,6 +77,10 @@ Copy-Item -Force (Join-Path $root "packaging\default_watchdog_settings.json") (J
 Copy-Item -Force (Join-Path $root "README.md") (Join-Path $liteRoot "README.md")
 Copy-Item -Force (Join-Path $root "packaging\install_lite.bat") (Join-Path $liteRoot "install_lite.bat")
 Compress-Archive -Path (Join-Path $liteRoot "*") -DestinationPath $liteZipPath -Force
+
+New-Item -ItemType Directory -Force $semiLiteSetupBuildRoot | Out-Null
+Compress-Archive -Path (Join-Path $liteRoot "*") -DestinationPath $semiLitePayloadZip -Force
+Copy-Item -Force (Join-Path $root "packaging\install_lite_payload.ps1") $semiLiteSetupScript
 
 New-Item -ItemType Directory -Force $setupBuildRoot | Out-Null
 Compress-Archive -Path $appBundle -DestinationPath $payloadZip -Force
@@ -107,7 +122,44 @@ $sedContent | Set-Content -Path $sedPath -Encoding ASCII
 
 iexpress.exe /N /Q $sedPath | Out-Null
 
+$semiLiteSedContent = @"
+[Version]
+Class=IEXPRESS
+SEDVersion=3
+[Options]
+PackagePurpose=InstallApp
+ShowInstallProgramWindow=0
+HideExtractAnimation=1
+UseLongFileName=1
+InsideCompressed=0
+CAB_FixedSize=0
+CAB_ResvCodeSigning=0
+RebootMode=N
+InstallPrompt=
+DisplayLicense=
+FinishMessage=
+TargetName=$semiLiteExePath
+FriendlyName=Network Watchdog Lite Setup
+AppLaunched=powershell.exe -NoProfile -ExecutionPolicy Bypass -File install_lite_payload.ps1
+PostInstallCmd=<None>
+AdminQuietInstCmd=
+UserQuietInstCmd=
+SourceFiles=SourceFiles
+[Strings]
+FILE0="lite_payload.zip"
+FILE1="install_lite_payload.ps1"
+[SourceFiles]
+SourceFiles0=$semiLiteSetupBuildRoot
+[SourceFiles0]
+%FILE0%=
+%FILE1%=
+"@
+$semiLiteSedContent | Set-Content -Path $semiLiteSedPath -Encoding ASCII
+
+iexpress.exe /N /Q $semiLiteSedPath | Out-Null
+
 Write-Host "Installer package created:"
 Write-Host $zipPath
 Write-Host $liteZipPath
 Write-Host $setupExePath
+Write-Host $semiLiteExePath
