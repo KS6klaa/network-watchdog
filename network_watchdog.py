@@ -67,7 +67,7 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 DEFAULT_INTERVAL_SECONDS = 180
 DEFAULT_TIMEOUT_SECONDS = 12
@@ -182,6 +182,8 @@ TEXT = {
         "system_alert_message": "System resource threshold reached: {items}",
         "slow_network_subject": "SLOW_NETWORK",
         "slow_network_message": "Network speed is slow / 网速速度变慢. Average latency {latency} ms for 2 consecutive checks.",
+        "recovery_subject": "RECOVERY",
+        "recovery_message": "Connectivity recovered to the configured threshold. OK targets {ok_count}/{total_count}, minimum required {minimum_ok}, success rate {success_rate}%, average latency {latency} ms.",
     },
     "zh": {
         "language_name": "\u4e2d\u6587",
@@ -274,6 +276,8 @@ TEXT = {
         "system_alert_message": "\u7cfb\u7edf\u8d44\u6e90\u8fbe\u5230\u9608\u503c\uff1a{items}",
         "slow_network_subject": "\u7f51\u901f\u53d8\u6162",
         "slow_network_message": "\u7f51\u901f\u901f\u5ea6\u53d8\u6162 / Network speed is slow\u3002\u5e73\u5747\u5ef6\u8fdf {latency} ms\uff0c\u5df2\u8fde\u7eed 2 \u6b21\u89e6\u53d1\u9608\u503c\u3002",
+        "recovery_subject": "\u6062\u590d",
+        "recovery_message": "\u7f51\u7edc\u5df2\u6062\u590d\u5230\u4f60\u914d\u7f6e\u7684\u9608\u503c\u3002\u6b63\u5e38\u76ee\u6807 {ok_count}/{total_count}\uff0c\u6700\u5c11\u8981\u6c42 {minimum_ok}\uff0c\u6210\u529f\u7387 {success_rate}%\uff0c\u5e73\u5747\u5ef6\u8fdf {latency} ms\u3002",
     },
 }
 
@@ -1438,9 +1442,10 @@ class NetworkWatchdogApp:
             return
 
         avg_latency = payload["avg_latency_ms"]
+        latency_text = avg_latency if avg_latency is not None else "-"
         message = (
             f"State changed to {current_state}. Success rate {payload['success_rate']}%, "
-            f"average latency {avg_latency if avg_latency is not None else '-'} ms."
+            f"average latency {latency_text} ms."
         )
         self._add_event_line(message)
 
@@ -1461,9 +1466,17 @@ class NetworkWatchdogApp:
                 except Exception:
                     pass
         elif current_state == "NORMAL" and self.recovery_email_var.get() and self.email_alert_var.get():
+            recovery_message = self._t(
+                "recovery_message",
+                ok_count=payload["ok_count"],
+                total_count=payload["total_count"],
+                minimum_ok=self._current_min_ok_targets(),
+                success_rate=payload["success_rate"],
+                latency=latency_text,
+            )
             threading.Thread(
                 target=self._send_email_worker,
-                args=("RECOVERY", message, False),
+                args=(self._t("recovery_subject"), recovery_message, False),
                 daemon=True,
             ).start()
         self.last_alert_state = current_state
