@@ -21,6 +21,11 @@ from pathlib import Path
 from urllib import error, request
 
 try:
+    import winreg
+except Exception:
+    winreg = None
+
+try:
     import certifi
 except Exception:
     certifi = None
@@ -68,7 +73,7 @@ else:
 
 
 APP_TITLE = "Network Watchdog / VPN Coffee Companion"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 APP_MUTEX_NAME = "Global\\NetworkWatchdogSingleInstance"
 GITHUB_REPO = "KS6klaa/network-watchdog"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -82,6 +87,7 @@ DEFAULT_SLOW_AVG_LATENCY_ALERT_MS = 2000
 DEFAULT_DOWN_ALERT_STREAK = 2
 DEFAULT_SLOW_ALERT_STREAK = 3
 DEFAULT_SYSTEM_ALERT_STREAK = 2
+DEFAULT_DAILY_SUMMARY_TIME = "21:00"
 HISTORY_WINDOW_SECONDS = 6 * 60 * 60
 DEFAULT_SMTP_HOST = "smtp.qq.com"
 DEFAULT_SMTP_PORT = 465
@@ -95,6 +101,18 @@ SETTINGS_PATH = ROOT_PATH / "watchdog_settings.json"
 LOG_DIR = ROOT_PATH / "logs"
 LOG_PATH = LOG_DIR / "network_watchdog_log.csv"
 MIN_PYTHON_VERSION = (3, 10)
+SYSTEM_THEME_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+STATE_NORMAL = "NORMAL"
+STATE_SLOW = "SLOW"
+STATE_OFFLINE = "OFFLINE"
+TRAY_STATE_COLORS = {
+    STATE_NORMAL: "#12b76a",
+    STATE_SLOW: "#f79009",
+    STATE_OFFLINE: "#f04438",
+}
+COUNTRY_NAME_CACHE: dict[tuple[str, str], str] = {}
 
 
 TEXT = {
@@ -126,6 +144,8 @@ TEXT = {
         "network_summary": "Network",
         "system_summary": "System",
         "today_alerts": "Email alerts today",
+        "external_ip": "External IP",
+        "power_summary": "Power",
         "manual_idle": "Manual refresh: idle",
         "manual_requested": "Manual refresh requested. Waiting for latency update...",
         "manual_running": "Manual refresh running: {seconds}s elapsed",
@@ -146,6 +166,8 @@ TEXT = {
         "sound_alert": "Sound alert",
         "popup_alert": "Popup alert",
         "email_alert": "Email alert",
+        "daily_summary_email": "Daily summary email",
+        "daily_summary_time": "Daily summary time",
         "recovery_email": "Recovery email",
         "slow_latency_alert_ms": "Slow latency alert (ms)",
         "close_to_tray": "Close button hides to tray",
@@ -203,6 +225,32 @@ TEXT = {
         "http_204": "HTTP 204 No Content - lightweight probe succeeded.",
         "http_other": "HTTP {code} - server responded.",
         "http_error": "HTTP error {code} - server rejected the request.",
+        "state_normal": "Normal",
+        "state_slow": "Slow",
+        "state_offline": "Offline",
+        "country_unknown": "Unknown",
+        "power_battery": "Battery",
+        "power_ac": "AC power",
+        "power_not_supported": "No battery",
+        "daily_summary_subject": "DAILY_SUMMARY",
+        "daily_summary_message": (
+            "Daily network summary\n"
+            "Date: {date}\n"
+            "Checks: {checks}\n"
+            "Normal: {normal}\n"
+            "Slow: {slow}\n"
+            "Offline: {offline}\n"
+            "Average latency: {avg_latency} ms\n"
+            "Min latency: {min_latency} ms\n"
+            "Max latency: {max_latency} ms\n"
+            "Email alerts sent today: {alert_count}\n"
+            "External IP: {external_ip}\n"
+            "Country: {country}\n"
+        ),
+        "power_alert_subject": "POWER_ALERT",
+        "power_alert_message": "Device switched to battery power. Battery {battery}%.",
+        "abnormal_shutdown_subject": "ABNORMAL_SHUTDOWN",
+        "abnormal_shutdown_message": "The previous run did not exit cleanly. This may indicate power loss or an unexpected shutdown.",
         "system_alert_subject": "SYSTEM_RESOURCE",
         "system_alert_message": "System resource threshold reached: {items}",
         "slow_network_subject": "SLOW_NETWORK",
@@ -238,6 +286,8 @@ TEXT = {
         "network_summary": "\u7f51\u7edc",
         "system_summary": "\u7cfb\u7edf",
         "today_alerts": "\u4eca\u65e5\u90ae\u4ef6\u8b66\u62a5",
+        "external_ip": "\u5916\u7f51IP",
+        "power_summary": "\u7535\u6e90",
         "manual_idle": "\u624b\u52a8\u5237\u65b0\uff1a\u7a7a\u95f2",
         "manual_requested": "\u5df2\u8bf7\u6c42\u624b\u52a8\u5237\u65b0\uff0c\u6b63\u5728\u7b49\u5f85\u5ef6\u8fdf\u66f4\u65b0...",
         "manual_running": "\u624b\u52a8\u5237\u65b0\u4e2d\uff1a\u5df2\u8fd0\u884c {seconds} \u79d2",
@@ -258,6 +308,8 @@ TEXT = {
         "sound_alert": "\u58f0\u97f3\u8b66\u62a5",
         "popup_alert": "\u5f39\u7a97\u8b66\u62a5",
         "email_alert": "\u90ae\u4ef6\u8b66\u62a5",
+        "daily_summary_email": "\u6bcf\u65e5\u6c47\u603b\u90ae\u4ef6",
+        "daily_summary_time": "\u6bcf\u65e5\u6c47\u603b\u65f6\u95f4",
         "recovery_email": "\u6062\u590d\u90ae\u4ef6",
         "slow_latency_alert_ms": "\u6162\u901f\u5ef6\u8fdf\u544a\u8b66(ms)",
         "close_to_tray": "\u5173\u95ed\u6309\u94ae\u9690\u85cf\u5230\u6258\u76d8",
@@ -315,6 +367,32 @@ TEXT = {
         "http_204": "HTTP 204 No Content - \u8f7b\u91cf\u63a2\u6d4b\u6210\u529f\u3002",
         "http_other": "HTTP {code} - \u670d\u52a1\u5668\u5df2\u54cd\u5e94\u3002",
         "http_error": "HTTP \u9519\u8bef {code} - \u670d\u52a1\u5668\u62d2\u7edd\u8bf7\u6c42\u3002",
+        "state_normal": "\u6b63\u5e38",
+        "state_slow": "\u5ef6\u8fdf",
+        "state_offline": "\u79bb\u7ebf",
+        "country_unknown": "\u672a\u77e5",
+        "power_battery": "\u7535\u6c60\u4f9b\u7535",
+        "power_ac": "\u63a5\u5165\u7535\u6e90",
+        "power_not_supported": "\u65e0\u7535\u6c60",
+        "daily_summary_subject": "\u6bcf\u65e5\u7f51\u7edc\u6c47\u603b",
+        "daily_summary_message": (
+            "\u6bcf\u65e5\u7f51\u7edc\u6c47\u603b\n"
+            "\u65e5\u671f\uff1a{date}\n"
+            "\u68c0\u6d4b\u6b21\u6570\uff1a{checks}\n"
+            "\u6b63\u5e38\uff1a{normal}\n"
+            "\u5ef6\u8fdf\uff1a{slow}\n"
+            "\u79bb\u7ebf\uff1a{offline}\n"
+            "\u5e73\u5747\u5ef6\u8fdf\uff1a{avg_latency} ms\n"
+            "\u6700\u4f4e\u5ef6\u8fdf\uff1a{min_latency} ms\n"
+            "\u6700\u9ad8\u5ef6\u8fdf\uff1a{max_latency} ms\n"
+            "\u4eca\u65e5\u5df2\u53d1\u90ae\u4ef6\u8b66\u62a5\uff1a{alert_count}\n"
+            "\u5916\u7f51 IP\uff1a{external_ip}\n"
+            "\u6240\u5c5e\u56fd\u5bb6\uff1a{country}\n"
+        ),
+        "power_alert_subject": "\u7535\u6e90\u8b66\u62a5",
+        "power_alert_message": "\u8bbe\u5907\u5df2\u5207\u6362\u5230\u7535\u6c60\u4f9b\u7535\u3002\u7535\u91cf {battery}%\u3002",
+        "abnormal_shutdown_subject": "\u5f02\u5e38\u4e2d\u65ad",
+        "abnormal_shutdown_message": "\u4e0a\u4e00\u6b21\u8fd0\u884c\u672a\u6b63\u5e38\u9000\u51fa\uff0c\u53ef\u80fd\u51fa\u73b0\u4e86\u65ad\u7535\u6216\u5f02\u5e38\u5173\u673a\u3002",
         "system_alert_subject": "\u7cfb\u7edf\u8d44\u6e90\u8b66\u62a5",
         "system_alert_message": "\u7cfb\u7edf\u8d44\u6e90\u8fbe\u5230\u9608\u503c\uff1a{items}",
         "slow_network_subject": "\u7f51\u901f\u53d8\u6162",
@@ -391,6 +469,8 @@ def default_settings() -> dict:
         "popup_alert_enabled": False,
         "email_alert_enabled": False,
         "recovery_email_enabled": False,
+        "daily_summary_enabled": False,
+        "daily_summary_time": DEFAULT_DAILY_SUMMARY_TIME,
         "auto_check_updates_enabled": True,
         "minimize_to_tray_on_close": True,
         "language": "en",
@@ -404,6 +484,8 @@ def default_settings() -> dict:
         "recipient_3": "",
         "email_alert_count_date": date.today().isoformat(),
         "email_alert_count_today": 0,
+        "last_daily_summary_sent_date": "",
+        "last_shutdown_clean": True,
     }
 
 
@@ -422,6 +504,18 @@ def load_settings() -> dict:
                 should_save = True
             if "auto_check_updates_enabled" not in saved:
                 settings["auto_check_updates_enabled"] = True
+                should_save = True
+            if "daily_summary_enabled" not in saved:
+                settings["daily_summary_enabled"] = False
+                should_save = True
+            if "daily_summary_time" not in saved:
+                settings["daily_summary_time"] = DEFAULT_DAILY_SUMMARY_TIME
+                should_save = True
+            if "last_daily_summary_sent_date" not in saved:
+                settings["last_daily_summary_sent_date"] = ""
+                should_save = True
+            if "last_shutdown_clean" not in saved:
+                settings["last_shutdown_clean"] = True
                 should_save = True
             if saved.get("recovery_email_enabled") is True:
                 settings["recovery_email_enabled"] = False
@@ -649,6 +743,163 @@ def collect_system_metrics() -> dict:
         return {"available": False, "cpu": None, "memory": None, "disk_c": None}
 
 
+def collect_power_metrics() -> dict:
+    battery_func = getattr(psutil, "sensors_battery", None) if psutil is not None else None
+    if battery_func is None:
+        return {"supported": False, "has_battery": False, "on_battery": False, "percent": None}
+    try:
+        battery = battery_func()
+    except Exception:
+        battery = None
+    if battery is None:
+        return {"supported": True, "has_battery": False, "on_battery": False, "percent": None}
+    percent = getattr(battery, "percent", None)
+    plugged = bool(getattr(battery, "power_plugged", False))
+    return {
+        "supported": True,
+        "has_battery": True,
+        "on_battery": not plugged,
+        "percent": round(percent, 1) if isinstance(percent, (int, float)) else None,
+    }
+
+
+def current_system_theme() -> str:
+    if platform.system() != "Windows" or winreg is None:
+        return THEME_LIGHT
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, SYSTEM_THEME_REG_PATH) as key:
+            value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+        return THEME_LIGHT if int(value) == 1 else THEME_DARK
+    except Exception:
+        return THEME_LIGHT
+
+
+def parse_daily_summary_time(raw_value: str) -> tuple[int, int]:
+    try:
+        hour_text, minute_text = str(raw_value).strip().split(":", 1)
+        hour = max(0, min(23, int(hour_text)))
+        minute = max(0, min(59, int(minute_text)))
+        return hour, minute
+    except Exception:
+        return 21, 0
+
+
+def localize_country_name(country_name: str | None, country_code: str | None, language: str) -> str:
+    fallback_name = (country_name or "").strip() or tr(language, "country_unknown")
+    code = (country_code or "").strip().upper()
+    if language == "en" or not code:
+        return fallback_name
+
+    cache_key = (code, language)
+    if cache_key in COUNTRY_NAME_CACHE:
+        return COUNTRY_NAME_CACHE[cache_key]
+
+    req = request.Request(
+        f"https://restcountries.com/v3.1/alpha/{code}?fields=translations,name",
+        headers={"User-Agent": f"network-watchdog/{APP_VERSION}"},
+    )
+    try:
+        context = create_https_ssl_context()
+        with request.urlopen(req, timeout=6, context=context) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        if isinstance(payload, list) and payload:
+            payload = payload[0]
+        translations = payload.get("translations", {}) if isinstance(payload, dict) else {}
+        translated = ""
+        if language == "zh":
+            translated = (
+                translations.get("zho", {}).get("common")
+                or translations.get("zht", {}).get("common")
+                or ""
+            )
+        if not translated and isinstance(payload, dict):
+            translated = payload.get("name", {}).get("common", "")
+        if translated:
+            COUNTRY_NAME_CACHE[cache_key] = translated
+            return translated
+    except Exception:
+        pass
+    COUNTRY_NAME_CACHE[cache_key] = fallback_name
+    return fallback_name
+
+
+def fetch_external_ip_info(timeout: int, language: str) -> dict:
+    sources = [
+        (
+            "ipwho.is",
+            "https://ipwho.is/",
+            lambda payload: {
+                "ip": payload.get("ip"),
+                "country": payload.get("country"),
+                "country_code": payload.get("country_code"),
+            },
+        ),
+        (
+            "api.ip.sb",
+            "https://api.ip.sb/geoip",
+            lambda payload: {
+                "ip": payload.get("ip"),
+                "country": payload.get("country"),
+                "country_code": payload.get("country_code"),
+            },
+        ),
+        (
+            "ipapi.co",
+            "https://ipapi.co/json/",
+            lambda payload: {
+                "ip": payload.get("ip"),
+                "country": payload.get("country_name"),
+                "country_code": payload.get("country_code"),
+            },
+        ),
+        (
+            "ifconfig.co",
+            "https://ifconfig.co/json",
+            lambda payload: {
+                "ip": payload.get("ip"),
+                "country": payload.get("country"),
+                "country_code": payload.get("country_iso"),
+            },
+        ),
+    ]
+    context = create_https_ssl_context()
+    for source_name, url, parser in sources:
+        try:
+            req = request.Request(
+                url,
+                headers={
+                    "User-Agent": f"network-watchdog/{APP_VERSION}",
+                    "Accept": "application/json",
+                },
+            )
+            with request.urlopen(req, timeout=max(4, timeout), context=context) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            parsed = parser(payload)
+            ip_value = str(parsed.get("ip") or "").strip()
+            if not ip_value:
+                continue
+            country_code = str(parsed.get("country_code") or "").strip().upper()
+            country_name = localize_country_name(parsed.get("country"), country_code, language)
+            return {
+                "ip": ip_value,
+                "country": country_name,
+                "country_raw": str(parsed.get("country") or "").strip(),
+                "country_code": country_code or "",
+                "source": source_name,
+                "ok": True,
+            }
+        except Exception:
+            continue
+    return {
+        "ip": "-",
+        "country": tr(language, "country_unknown"),
+        "country_raw": "",
+        "country_code": "",
+        "source": "-",
+        "ok": False,
+    }
+
+
 class NetworkWatchdogApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -678,6 +929,7 @@ class NetworkWatchdogApp:
         self.latest_batch: dict | None = None
         self.last_alert_state = "INIT"
         self.last_system_alert_active = False
+        self.last_power_alert_active = False
         self.history_points: list[dict] = []
         self.rows: dict[str, str] = {}
         self.event_lines: list[str] = []
@@ -691,6 +943,16 @@ class NetworkWatchdogApp:
         self.slow_latency_alert_active = False
         self.update_check_in_progress = False
         self.latest_release_info: dict | None = None
+        self.current_theme = current_system_theme()
+        self.external_ip_info = {
+            "ip": "-",
+            "country": self._t("country_unknown") if hasattr(self, "language") else "Unknown",
+            "country_raw": "",
+            "country_code": "",
+            "source": "-",
+            "ok": False,
+        }
+        self.power_metrics = collect_power_metrics()
 
         self.widgets: dict[str, object] = {}
         self.labels: dict[str, tk.StringVar] = {}
@@ -710,6 +972,7 @@ class NetworkWatchdogApp:
         self.manual_refresh_var = tk.StringVar()
         self.system_status_var = tk.StringVar()
         self.email_alert_count_var = tk.StringVar()
+        self.external_ip_var = tk.StringVar()
         self.current_version_var = tk.StringVar(value=f"v{APP_VERSION}")
         self.latest_version_var = tk.StringVar(value="-")
         self.update_published_var = tk.StringVar(value="-")
@@ -718,11 +981,13 @@ class NetworkWatchdogApp:
         self.sound_alert_var = tk.BooleanVar(value=bool(self.settings["sound_alert_enabled"]))
         self.popup_alert_var = tk.BooleanVar(value=bool(self.settings["popup_alert_enabled"]))
         self.email_alert_var = tk.BooleanVar(value=bool(self.settings["email_alert_enabled"]))
+        self.daily_summary_var = tk.BooleanVar(value=bool(self.settings.get("daily_summary_enabled", False)))
         self.recovery_email_var = tk.BooleanVar(value=bool(self.settings["recovery_email_enabled"]))
         self.auto_update_check_var = tk.BooleanVar(value=bool(self.settings["auto_check_updates_enabled"]))
         self.minimize_on_close_var = tk.BooleanVar(
             value=bool(self.settings["minimize_to_tray_on_close"]) and self.tray_available
         )
+        self.daily_summary_time_var = tk.StringVar(value=str(self.settings.get("daily_summary_time", DEFAULT_DAILY_SUMMARY_TIME)))
         self.smtp_host_var = tk.StringVar(value=str(self.settings["smtp_host"]))
         self.sender_email_var = tk.StringVar(value=str(self.settings["sender_email"]))
         self.sender_name_var = tk.StringVar(value=str(self.settings["sender_name"]))
@@ -735,13 +1000,16 @@ class NetworkWatchdogApp:
 
         self._ensure_log_file()
         self._build_ui()
+        self._apply_theme()
         self._refresh_language_text()
         self._setup_tray()
         self.startup_complete = True
         self._refresh_environment_checks()
+        self._mark_run_started()
         self._start_worker()
         self._poll_results()
         self._tick_clock()
+        self._tick_theme()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self.root.bind("<Unmap>", self._on_minimize_event)
         self.root.after(800, self._show_environment_startup_notice)
@@ -806,12 +1074,21 @@ class NetworkWatchdogApp:
 
         summary = ttk.Frame(self.root, padding=(10, 0, 10, 8))
         summary.pack(fill=tk.X)
-        ttk.Label(summary, textvariable=self.status_var).grid(row=0, column=0, sticky="w")
+        self.widgets["status_summary_label"] = ttk.Label(summary, textvariable=self.status_var)
+        self.widgets["status_summary_label"].grid(row=0, column=0, sticky="w")
         ttk.Label(summary, textvariable=self.system_status_var).grid(row=1, column=0, sticky="w")
         ttk.Label(summary, textvariable=self.email_alert_count_var).grid(row=2, column=0, sticky="w")
+        ttk.Label(summary, textvariable=self.external_ip_var).grid(row=3, column=0, sticky="w")
         ttk.Label(summary, textvariable=self.manual_refresh_var, foreground="#1570ef").grid(row=0, column=1, sticky="e")
         ttk.Label(summary, textvariable=self.last_update_var).grid(row=1, column=1, sticky="e")
         ttk.Label(summary, textvariable=self.next_update_var).grid(row=2, column=1, sticky="e")
+        daily_summary_frame = ttk.Frame(summary)
+        daily_summary_frame.grid(row=3, column=1, sticky="e")
+        self.widgets["daily_summary_check"] = ttk.Checkbutton(daily_summary_frame, variable=self.daily_summary_var)
+        self.widgets["daily_summary_check"].pack(side=tk.LEFT)
+        self.widgets["daily_summary_time_label"] = ttk.Label(daily_summary_frame)
+        self.widgets["daily_summary_time_label"].pack(side=tk.LEFT, padx=(8, 4))
+        ttk.Entry(daily_summary_frame, textvariable=self.daily_summary_time_var, width=6).pack(side=tk.LEFT)
         summary.columnconfigure(0, weight=1)
         summary.columnconfigure(1, weight=1)
 
@@ -918,47 +1195,53 @@ class NetworkWatchdogApp:
         self.widgets["recovery_check"].grid(row=0, column=3, sticky="w", pady=3)
         self.widgets["recovery_check"].state(["disabled"])
 
+        self.widgets["daily_summary_email_check"] = ttk.Checkbutton(parent, variable=self.daily_summary_var)
+        self.widgets["daily_summary_email_check"].grid(row=1, column=0, sticky="w", pady=3)
+        self.widgets["daily_summary_time_email_label"] = ttk.Label(parent)
+        self.widgets["daily_summary_time_email_label"].grid(row=1, column=1, sticky="e", pady=3, padx=(0, 6))
+        ttk.Entry(parent, textvariable=self.daily_summary_time_var, width=6).grid(row=1, column=2, sticky="w", pady=3)
+
         self.widgets["tray_check"] = ttk.Checkbutton(parent, variable=self.minimize_on_close_var)
-        self.widgets["tray_check"].grid(row=1, column=0, columnspan=2, sticky="w", pady=3)
+        self.widgets["tray_check"].grid(row=2, column=0, columnspan=2, sticky="w", pady=3)
         if not self.tray_available:
             self.widgets["tray_check"].state(["disabled"])
 
         self.widgets["system_threshold_label"] = ttk.Label(parent)
-        self.widgets["system_threshold_label"].grid(row=1, column=2, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.system_threshold_var, width=8).grid(row=1, column=3, sticky="w", pady=3)
+        self.widgets["system_threshold_label"].grid(row=2, column=2, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.system_threshold_var, width=8).grid(row=2, column=3, sticky="w", pady=3)
 
         self.widgets["slow_latency_alert_label"] = ttk.Label(parent)
-        self.widgets["slow_latency_alert_label"].grid(row=2, column=2, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.slow_latency_alert_var, width=8).grid(row=2, column=3, sticky="w", pady=3)
+        self.widgets["slow_latency_alert_label"].grid(row=3, column=2, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.slow_latency_alert_var, width=8).grid(row=3, column=3, sticky="w", pady=3)
 
         self.widgets["smtp_host_label"] = ttk.Label(parent)
-        self.widgets["smtp_host_label"].grid(row=3, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.smtp_host_var).grid(row=3, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["smtp_host_label"].grid(row=4, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.smtp_host_var).grid(row=4, column=1, sticky="ew", pady=3, padx=(0, 10))
 
         self.widgets["sender_email_label"] = ttk.Label(parent)
-        self.widgets["sender_email_label"].grid(row=4, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.sender_email_var).grid(row=4, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["sender_email_label"].grid(row=5, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.sender_email_var).grid(row=5, column=1, sticky="ew", pady=3, padx=(0, 10))
         self.widgets["sender_name_label"] = ttk.Label(parent)
-        self.widgets["sender_name_label"].grid(row=4, column=2, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.sender_name_var).grid(row=4, column=3, sticky="ew", pady=3)
+        self.widgets["sender_name_label"].grid(row=5, column=2, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.sender_name_var).grid(row=5, column=3, sticky="ew", pady=3)
 
         self.widgets["smtp_auth_label"] = ttk.Label(parent)
-        self.widgets["smtp_auth_label"].grid(row=5, column=0, sticky="w", pady=3)
-        ttk.Entry(parent, textvariable=self.auth_code_var, show="*").grid(row=5, column=1, sticky="ew", pady=3, padx=(0, 10))
+        self.widgets["smtp_auth_label"].grid(row=6, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=self.auth_code_var, show="*").grid(row=6, column=1, sticky="ew", pady=3, padx=(0, 10))
 
         for index, var in enumerate(self.recipient_vars):
-            row = 6 + index
+            row = 7 + index
             label_key = f"recipient_{index + 1}"
             self.widgets[f"{label_key}_label"] = ttk.Label(parent)
             self.widgets[f"{label_key}_label"].grid(row=row, column=0, sticky="w", pady=3)
             ttk.Entry(parent, textvariable=var).grid(row=row, column=1, columnspan=3, sticky="ew", pady=3)
 
         self.widgets["save_button"] = ttk.Button(parent, command=self._apply_settings)
-        self.widgets["save_button"].grid(row=9, column=0, sticky="w", pady=(10, 0))
+        self.widgets["save_button"].grid(row=10, column=0, sticky="w", pady=(10, 0))
         self.widgets["test_sound_button"] = ttk.Button(parent, command=self._play_test_sound)
-        self.widgets["test_sound_button"].grid(row=9, column=1, sticky="w", pady=(10, 0))
+        self.widgets["test_sound_button"].grid(row=10, column=1, sticky="w", pady=(10, 0))
         self.widgets["email_note"] = ttk.Label(parent, wraplength=840, foreground="#475467")
-        self.widgets["email_note"].grid(row=10, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        self.widgets["email_note"].grid(row=11, column=0, columnspan=4, sticky="w", pady=(10, 0))
 
     def _build_history_tab(self, parent: ttk.Frame) -> None:
         parent.rowconfigure(1, weight=1)
@@ -1068,6 +1351,10 @@ class NetworkWatchdogApp:
             "sound_check": "sound_alert",
             "popup_check": "popup_alert",
             "email_check": "email_alert",
+            "daily_summary_check": "daily_summary_email",
+            "daily_summary_time_label": "daily_summary_time",
+            "daily_summary_email_check": "daily_summary_email",
+            "daily_summary_time_email_label": "daily_summary_time",
             "recovery_check": "recovery_email",
             "tray_check": "close_to_tray",
             "system_threshold_label": "system_summary",
@@ -1146,6 +1433,7 @@ class NetworkWatchdogApp:
         else:
             self.status_var.set(f"{self._t('network_summary')}: {self._t('waiting_probe')}")
             self.system_status_var.set(f"{self._t('system_summary')}: -")
+            self.external_ip_var.set(f"{self._t('external_ip')}: - | {self._t('country_unknown')}")
             self.last_update_var.set(self._t("last_not_started"))
             self.next_update_var.set(self._t("next_not_scheduled"))
         self.manual_refresh_var.set(self._t("manual_idle"))
@@ -1163,22 +1451,30 @@ class NetworkWatchdogApp:
     def _update_nav_state(self) -> None:
         if not hasattr(self, "notebook") or not self.nav_buttons:
             return
+        if self.current_theme == THEME_DARK:
+            active_bg, active_fg = "#175cd3", "#ffffff"
+            idle_bg, idle_fg = "#182230", "#d0d5dd"
+            idle_active_bg, idle_active_fg = "#344054", "#ffffff"
+        else:
+            active_bg, active_fg = "#1570ef", "#ffffff"
+            idle_bg, idle_fg = "#ffffff", "#344054"
+            idle_active_bg, idle_active_fg = "#d0d5dd", "#101828"
         current_tab = self.notebook.index(self.notebook.select())
         for index, button in enumerate(self.nav_buttons):
             if index == current_tab:
                 button.configure(
-                    bg="#1570ef",
-                    fg="#ffffff",
-                    activebackground="#175cd3",
-                    activeforeground="#ffffff",
+                    bg=active_bg,
+                    fg=active_fg,
+                    activebackground=active_bg,
+                    activeforeground=active_fg,
                     font=("Segoe UI", 10, "bold"),
                 )
             else:
                 button.configure(
-                    bg="#ffffff",
-                    fg="#344054",
-                    activebackground="#d0d5dd",
-                    activeforeground="#101828",
+                    bg=idle_bg,
+                    fg=idle_fg,
+                    activebackground=idle_active_bg,
+                    activeforeground=idle_active_fg,
                     font=("Segoe UI", 10, "normal"),
                 )
 
@@ -1208,16 +1504,17 @@ class NetworkWatchdogApp:
             self._add_event_line("System tray disabled: install pillow and pystray")
             return
 
-        image = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
-        draw = ImageDraw.Draw(image)
-        draw.ellipse((8, 8, 56, 56), fill="#12b76a")
-        draw.ellipse((22, 22, 42, 42), fill="#ffffff")
         menu = pystray.Menu(
             pystray.MenuItem("Show", self._tray_show_window),
             pystray.MenuItem("Refresh now", self._tray_refresh_now),
             pystray.MenuItem("Exit", self._tray_exit_app),
         )
-        self.tray_icon = pystray.Icon("network_watchdog", image, APP_TITLE, menu)
+        self.tray_icon = pystray.Icon(
+            "network_watchdog",
+            self._build_tray_image(self.last_alert_state if self.last_alert_state != "INIT" else STATE_NORMAL),
+            APP_TITLE,
+            menu,
+        )
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
     def _start_worker(self) -> None:
@@ -1232,6 +1529,7 @@ class NetworkWatchdogApp:
             timeout = self._current_timeout()
             threshold = self._current_threshold()
             minimum_ok = self._current_min_ok_targets()
+            slow_threshold = self._current_slow_state_threshold()
             results = []
             ok_count = 0
             latency_values = []
@@ -1250,10 +1548,12 @@ class NetworkWatchdogApp:
                 ok_count,
                 len(self.targets),
                 avg_latency,
-                threshold,
+                slow_threshold,
                 minimum_ok,
             )
             system_metrics = collect_system_metrics()
+            power_metrics = collect_power_metrics()
+            external_ip = fetch_external_ip_info(timeout, self.language)
 
             payload = {
                 "type": "batch",
@@ -1266,6 +1566,8 @@ class NetworkWatchdogApp:
                 "success_rate": success_rate,
                 "summary_state": summary_state,
                 "system_metrics": system_metrics,
+                "power_metrics": power_metrics,
+                "external_ip": external_ip,
                 "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "timestamp": time.time(),
             }
@@ -1361,6 +1663,8 @@ class NetworkWatchdogApp:
                 continue
 
             self.latest_batch = payload
+            self.external_ip_info = payload.get("external_ip", self.external_ip_info)
+            self.power_metrics = payload.get("power_metrics", self.power_metrics)
             for result in payload["results"]:
                 self.tree.item(
                     self.rows[result["site"]],
@@ -1380,6 +1684,9 @@ class NetworkWatchdogApp:
             self._handle_down_alert(payload)
             self._handle_system_alert(payload)
             self._handle_slow_latency_alert(payload)
+            self._handle_power_alert(payload)
+            self._check_daily_summary(payload)
+            self._refresh_tray_icon_state(payload["summary_state"])
 
             if payload.get("trigger") == "manual":
                 self.manual_refresh_pending = False
@@ -1410,22 +1717,37 @@ class NetworkWatchdogApp:
         state = payload["summary_state"]
         avg_latency = payload["avg_latency_ms"]
         success_rate = payload["success_rate"]
+        state_text = self._state_text(state)
         self.status_var.set(
-            f"{self._t('network_summary')}: {state} | "
+            f"{self._t('network_summary')}: {state_text} | "
             f"{self._t('success')} {payload['ok_count']}/{payload['total_count']} "
             f"({success_rate}%) | {self._t('avg_latency')} "
             f"{avg_latency if avg_latency is not None else '-'} ms"
         )
+        status_label = self.widgets.get("status_summary_label")
+        if status_label is not None:
+            status_label.configure(foreground=TRAY_STATE_COLORS.get(state, "#12b76a"))
         metrics = payload.get("system_metrics", {})
+        power_metrics = payload.get("power_metrics", {})
         if metrics.get("available"):
             self.system_status_var.set(
                 f"{self._t('system_summary')}: "
                 f"{self._t('cpu')} {metrics['cpu']}% | "
                 f"{self._t('memory')} {metrics['memory']}% | "
-                f"{self._t('c_drive')} {metrics['disk_c']}%"
+                f"{self._t('c_drive')} {metrics['disk_c']}% | "
+                f"{self._t('power_summary')} {self._power_status_text(power_metrics)}"
             )
         else:
             self.system_status_var.set(f"{self._t('system_summary')}: psutil unavailable")
+        external_ip = payload.get("external_ip", {})
+        country_text = localize_country_name(
+            external_ip.get("country_raw") or external_ip.get("country"),
+            external_ip.get("country_code"),
+            self.language,
+        )
+        self.external_ip_var.set(
+            f"{self._t('external_ip')}: {external_ip.get('ip', '-')} | {country_text}"
+        )
         self.last_update_var.set(self._t("last_update", time=payload["checked_at"]))
         self._refresh_email_alert_count_label()
 
@@ -1453,6 +1775,8 @@ class NetworkWatchdogApp:
                 "sound_alert_enabled": self.sound_alert_var.get(),
                 "popup_alert_enabled": self.popup_alert_var.get(),
                 "email_alert_enabled": self.email_alert_var.get(),
+                "daily_summary_enabled": self.daily_summary_var.get(),
+                "daily_summary_time": self._current_daily_summary_time(),
                 "recovery_email_enabled": self.recovery_email_var.get(),
                 "auto_check_updates_enabled": self.auto_update_check_var.get(),
                 "minimize_to_tray_on_close": self.minimize_on_close_var.get(),
@@ -1466,6 +1790,8 @@ class NetworkWatchdogApp:
                 "recipient_3": self.recipient_vars[2].get().strip(),
                 "email_alert_count_date": self.settings.get("email_alert_count_date", date.today().isoformat()),
                 "email_alert_count_today": self.settings.get("email_alert_count_today", 0),
+                "last_daily_summary_sent_date": self.settings.get("last_daily_summary_sent_date", ""),
+                "last_shutdown_clean": self.settings.get("last_shutdown_clean", False),
             }
         )
         self.interval_var.set(str(self.settings["interval_seconds"]))
@@ -1474,6 +1800,7 @@ class NetworkWatchdogApp:
         self.min_ok_var.set(str(self.settings["minimum_ok_targets"]))
         self.system_threshold_var.set(str(self.settings["system_alert_threshold"]))
         self.slow_latency_alert_var.set(str(self.settings["slow_avg_latency_alert_ms"]))
+        self.daily_summary_time_var.set(str(self.settings["daily_summary_time"]))
         save_settings(self.settings)
         self.next_run_ts = time.time() + self.settings["interval_seconds"]
         self._add_event_line(self._t("settings_saved"))
@@ -1521,17 +1848,17 @@ class NetworkWatchdogApp:
         ok_count: int,
         total_count: int,
         avg_latency: int | None,
-        degraded_threshold: int,
+        slow_threshold: int,
         minimum_ok_targets: int,
     ) -> str:
         if ok_count == 0:
-            return "DOWN"
+            return STATE_OFFLINE
         minimum_ok_targets = max(1, min(minimum_ok_targets, total_count))
         if ok_count < minimum_ok_targets:
-            return "DEGRADED"
-        if avg_latency is not None and avg_latency >= degraded_threshold:
-            return "DEGRADED"
-        return "NORMAL"
+            return STATE_SLOW
+        if avg_latency is not None and avg_latency >= slow_threshold:
+            return STATE_SLOW
+        return STATE_NORMAL
 
     def _record_history_point(self, payload: dict) -> None:
         self.history_points.append(
@@ -1552,31 +1879,38 @@ class NetworkWatchdogApp:
                 self._draw_history_chart(canvas)
 
     def _draw_history_chart(self, canvas: tk.Canvas) -> None:
+        dark_mode = self.current_theme == THEME_DARK
+        background = "#1d2939" if dark_mode else "#fcfcfd"
+        border = "#344054" if dark_mode else "#d0d5dd"
+        axis = "#98a2b3"
+        grid = "#344054" if dark_mode else "#eaecf0"
+        muted = "#d0d5dd" if dark_mode else "#667085"
         width = max(260, canvas.winfo_width())
         height = max(160, canvas.winfo_height())
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#fcfcfd", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill=background, outline=border)
         left, right, top, bottom = 44, 16, 16, 32
         plot_width = width - left - right
         plot_height = height - top - bottom
-        canvas.create_line(left, top, left, height - bottom, fill="#98a2b3")
-        canvas.create_line(left, height - bottom, width - right, height - bottom, fill="#98a2b3")
+        canvas.create_line(left, top, left, height - bottom, fill=axis)
+        canvas.create_line(left, height - bottom, width - right, height - bottom, fill=axis)
         points = [p for p in self.history_points if p["avg_latency_ms"] is not None]
         if not points:
-            canvas.create_text(width / 2, height / 2, text="No history yet", fill="#667085", font=("Segoe UI", 10))
+            canvas.create_text(width / 2, height / 2, text="No history yet", fill=muted, font=("Segoe UI", 10))
             return
 
-        max_latency = max([p["avg_latency_ms"] for p in points] + [self._current_threshold(), 100])
+        max_latency = max([p["avg_latency_ms"] for p in points] + [self._current_slow_state_threshold(), 100])
         start_ts = time.time() - HISTORY_WINDOW_SECONDS
         end_ts = time.time()
         for i in range(4):
             y = top + i * (plot_height / 3)
             value = int(max_latency - (max_latency * i / 3))
-            canvas.create_line(left, y, width - right, y, fill="#eaecf0")
-            canvas.create_text(24, y, text=str(value), fill="#667085", font=("Segoe UI", 8))
+            canvas.create_line(left, y, width - right, y, fill=grid)
+            canvas.create_text(24, y, text=str(value), fill=muted, font=("Segoe UI", 8))
 
-        threshold_y = top + plot_height - (min(self._current_threshold(), max_latency) / max_latency * plot_height)
+        threshold_y = top + plot_height - (min(self._current_slow_state_threshold(), max_latency) / max_latency * plot_height)
         canvas.create_line(left, threshold_y, width - right, threshold_y, fill="#f79009", dash=(4, 3))
+        canvas.create_text(width - right - 48, max(top + 10, threshold_y - 8), text=self._t("state_slow"), fill="#b54708", font=("Segoe UI", 8))
 
         line_points = []
         for point in points:
@@ -1584,21 +1918,21 @@ class NetworkWatchdogApp:
             y = top + plot_height - (point["avg_latency_ms"] / max_latency * plot_height)
             line_points.extend([x, y])
             fill = "#12b76a"
-            if point["summary_state"] == "DEGRADED":
+            if point["summary_state"] == STATE_SLOW:
                 fill = "#f79009"
-            elif point["summary_state"] == "DOWN":
+            elif point["summary_state"] == STATE_OFFLINE:
                 fill = "#f04438"
             canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=fill, outline=fill)
         if len(line_points) >= 4:
             canvas.create_line(*line_points, fill="#1570ef", width=2, smooth=True)
-        canvas.create_text(left, height - 14, text="-6h", fill="#667085", font=("Segoe UI", 8))
-        canvas.create_text(width - right - 18, height - 14, text="now", fill="#667085", font=("Segoe UI", 8))
+        canvas.create_text(left, height - 14, text="-6h", fill=muted, font=("Segoe UI", 8))
+        canvas.create_text(width - right - 18, height - 14, text="now", fill=muted, font=("Segoe UI", 8))
 
     def _handle_alert_transition(self, payload: dict) -> None:
         current_state = payload["summary_state"]
         initial_transition = False
         if self.last_alert_state == "INIT":
-            if current_state == "NORMAL":
+            if current_state == STATE_NORMAL:
                 self.last_alert_state = current_state
                 self._add_event_line(f"Initial state: {current_state}")
                 return
@@ -1610,12 +1944,12 @@ class NetworkWatchdogApp:
         avg_latency = payload["avg_latency_ms"]
         latency_text = avg_latency if avg_latency is not None else "-"
         message = (
-            f"State changed to {current_state}. Success rate {payload['success_rate']}%, "
+            f"State changed to {self._state_text(current_state)}. Success rate {payload['success_rate']}%, "
             f"average latency {latency_text} ms."
         )
         self._add_event_line(message)
 
-        if current_state in {"DEGRADED", "DOWN"}:
+        if current_state in {STATE_SLOW, STATE_OFFLINE}:
             if self.sound_alert_var.get():
                 self._play_alert_sound()
             if self.popup_alert_var.get():
@@ -1640,7 +1974,7 @@ class NetworkWatchdogApp:
             self.popup_alert_open = False
 
     def _handle_down_alert(self, payload: dict) -> None:
-        if payload.get("summary_state") == "DOWN":
+        if payload.get("summary_state") == STATE_OFFLINE:
             self.down_alert_streak += 1
         else:
             self.down_alert_streak = 0
@@ -1659,7 +1993,7 @@ class NetworkWatchdogApp:
         )
         threading.Thread(
             target=self._send_email_worker,
-            args=("DOWN", message, True),
+            args=(STATE_OFFLINE, message, True),
             daemon=True,
         ).start()
         self._add_event_line(message)
@@ -1998,6 +2332,9 @@ class NetworkWatchdogApp:
     def _current_threshold(self) -> int:
         return self._parse_positive_int(self.threshold_var.get(), DEFAULT_DEGRADED_LATENCY_MS)
 
+    def _current_slow_state_threshold(self) -> int:
+        return max(1, int(self._current_threshold() * 0.3))
+
     def _current_min_ok_targets(self) -> int:
         value = self._parse_positive_int(self.min_ok_var.get(), DEFAULT_MINIMUM_OK_TARGETS)
         return max(1, min(value, len(self.targets)))
@@ -2011,12 +2348,245 @@ class NetworkWatchdogApp:
             DEFAULT_SLOW_AVG_LATENCY_ALERT_MS,
         )
 
+    def _current_daily_summary_time(self) -> str:
+        hour, minute = parse_daily_summary_time(self.daily_summary_time_var.get())
+        return f"{hour:02d}:{minute:02d}"
+
+    def _state_text(self, state: str) -> str:
+        mapping = {
+            STATE_NORMAL: self._t("state_normal"),
+            STATE_SLOW: self._t("state_slow"),
+            STATE_OFFLINE: self._t("state_offline"),
+        }
+        return mapping.get(state, state)
+
+    def _power_status_text(self, power_metrics: dict | None = None) -> str:
+        metrics = power_metrics or self.power_metrics
+        if not metrics.get("supported"):
+            return self._t("power_not_supported")
+        if not metrics.get("has_battery"):
+            return self._t("power_not_supported")
+        if metrics.get("on_battery"):
+            percent = metrics.get("percent")
+            return f"{self._t('power_battery')} {percent if percent is not None else '-'}%"
+        return self._t("power_ac")
+
+    def _build_tray_image(self, state: str):
+        color = TRAY_STATE_COLORS.get(state, TRAY_STATE_COLORS[STATE_NORMAL])
+        image = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((8, 8, 56, 56), fill=color)
+        draw.ellipse((22, 22, 42, 42), fill="#ffffff")
+        return image
+
+    def _refresh_tray_icon_state(self, state: str) -> None:
+        if self.tray_icon is None or not self.tray_available:
+            return
+        try:
+            self.tray_icon.icon = self._build_tray_image(state)
+            self.tray_icon.title = f"{APP_TITLE} - {self._state_text(state)}"
+            self.tray_icon.update_menu()
+        except Exception:
+            pass
+
+    def _mark_run_started(self) -> None:
+        abnormal_shutdown = not bool(self.settings.get("last_shutdown_clean", True))
+        self.settings["last_shutdown_clean"] = False
+        save_settings(self.settings)
+        if abnormal_shutdown and self.email_alert_var.get() and self.power_metrics.get("has_battery"):
+            threading.Thread(
+                target=self._send_email_worker,
+                args=(self._t("abnormal_shutdown_subject"), self._t("abnormal_shutdown_message"), True),
+                daemon=True,
+            ).start()
+
+    def _mark_run_clean_exit(self) -> None:
+        self.settings["last_shutdown_clean"] = True
+        save_settings(self.settings)
+
+    def _handle_power_alert(self, payload: dict) -> None:
+        power_metrics = payload.get("power_metrics", {})
+        active = bool(power_metrics.get("has_battery")) and bool(power_metrics.get("on_battery"))
+        if not active:
+            self.last_power_alert_active = False
+            return
+        if self.last_power_alert_active or not self.email_alert_var.get():
+            return
+        battery_value = power_metrics.get("percent")
+        message = self._t("power_alert_message", battery=battery_value if battery_value is not None else "-")
+        threading.Thread(
+            target=self._send_email_worker,
+            args=(self._t("power_alert_subject"), message, True),
+            daemon=True,
+        ).start()
+        self._add_event_line(message)
+        self.last_power_alert_active = True
+
+    def _check_daily_summary(self, payload: dict) -> None:
+        if not self.daily_summary_var.get():
+            return
+        now = datetime.now()
+        target_hour, target_minute = parse_daily_summary_time(self.daily_summary_time_var.get())
+        if (now.hour, now.minute) < (target_hour, target_minute):
+            return
+        today_key = now.date().isoformat()
+        if self.settings.get("last_daily_summary_sent_date") == today_key:
+            return
+        message = self._build_daily_summary_message(today_key, payload)
+        threading.Thread(
+            target=self._send_email_worker,
+            args=(self._t("daily_summary_subject"), message, False),
+            daemon=True,
+        ).start()
+        self.settings["last_daily_summary_sent_date"] = today_key
+        save_settings(self.settings)
+        self._add_event_line(f"Daily summary email queued for {today_key}")
+
+    def _build_daily_summary_message(self, day_text: str, payload: dict | None = None) -> str:
+        checks = 0
+        state_counts = {STATE_NORMAL: 0, STATE_SLOW: 0, STATE_OFFLINE: 0}
+        avg_values: list[float] = []
+        min_latency: int | None = None
+        max_latency: int | None = None
+        if LOG_PATH.exists():
+            try:
+                with LOG_PATH.open("r", encoding="utf-8", newline="") as file:
+                    reader = csv.DictReader(file)
+                    grouped: dict[str, dict] = {}
+                    for row in reader:
+                        timestamp = str(row.get("timestamp", "")).strip()
+                        if not timestamp.startswith(day_text):
+                            continue
+                        summary_state = str(row.get("summary_state", "")).strip() or STATE_NORMAL
+                        if summary_state == "DEGRADED":
+                            summary_state = STATE_SLOW
+                        elif summary_state == "DOWN":
+                            summary_state = STATE_OFFLINE
+                        latency_raw = str(row.get("latency_ms", "")).strip()
+                        grouped.setdefault(timestamp, {"state": summary_state, "latencies": []})
+                        if latency_raw:
+                            try:
+                                latency_value = int(float(latency_raw))
+                                grouped[timestamp]["latencies"].append(latency_value)
+                            except ValueError:
+                                pass
+                    checks = len(grouped)
+                    for item in grouped.values():
+                        state = item["state"]
+                        if state in state_counts:
+                            state_counts[state] += 1
+                        latencies = item["latencies"]
+                        if latencies:
+                            batch_avg = sum(latencies) / len(latencies)
+                            avg_values.append(batch_avg)
+                            batch_min = min(latencies)
+                            batch_max = max(latencies)
+                            min_latency = batch_min if min_latency is None else min(min_latency, batch_min)
+                            max_latency = batch_max if max_latency is None else max(max_latency, batch_max)
+            except Exception:
+                pass
+        external_ip = (payload or {}).get("external_ip", self.external_ip_info)
+        country_text = localize_country_name(
+            external_ip.get("country_raw") or external_ip.get("country"),
+            external_ip.get("country_code"),
+            self.language,
+        )
+        average_latency = int(sum(avg_values) / len(avg_values)) if avg_values else "-"
+        return self._t(
+            "daily_summary_message",
+            date=day_text,
+            checks=checks,
+            normal=state_counts[STATE_NORMAL],
+            slow=state_counts[STATE_SLOW],
+            offline=state_counts[STATE_OFFLINE],
+            avg_latency=average_latency,
+            min_latency=min_latency if min_latency is not None else "-",
+            max_latency=max_latency if max_latency is not None else "-",
+            alert_count=int(self.settings.get("email_alert_count_today", 0)),
+            external_ip=external_ip.get("ip", "-"),
+            country=country_text,
+        )
+
     def _on_language_changed(self, _event: object = None) -> None:
         selected = self.language_var.get()
         self.language = "zh" if selected == TEXT["zh"]["language_name"] else "en"
         self.settings["language"] = self.language
         save_settings(self.settings)
+        if self.external_ip_info:
+            self.external_ip_info["country"] = localize_country_name(
+                self.external_ip_info.get("country_raw") or self.external_ip_info.get("country"),
+                self.external_ip_info.get("country_code"),
+                self.language,
+            )
         self._refresh_language_text()
+
+    def _apply_theme(self) -> None:
+        palette = {
+            THEME_LIGHT: {
+                "root_bg": "#f5f7fb",
+                "panel_bg": "#eef2f6",
+                "card_bg": "#fcfcfd",
+                "text": "#101828",
+                "muted": "#667085",
+                "border": "#d0d5dd",
+                "nav_active_bg": "#1570ef",
+                "nav_active_fg": "#ffffff",
+                "nav_idle_bg": "#ffffff",
+                "nav_idle_fg": "#344054",
+                "list_bg": "#ffffff",
+            },
+            THEME_DARK: {
+                "root_bg": "#101828",
+                "panel_bg": "#182230",
+                "card_bg": "#1d2939",
+                "text": "#f8fafc",
+                "muted": "#98a2b3",
+                "border": "#344054",
+                "nav_active_bg": "#175cd3",
+                "nav_active_fg": "#ffffff",
+                "nav_idle_bg": "#182230",
+                "nav_idle_fg": "#d0d5dd",
+                "list_bg": "#1d2939",
+            },
+        }[self.current_theme]
+        style = ttk.Style()
+        if self.current_theme == THEME_DARK and "clam" in style.theme_names():
+            style.theme_use("clam")
+        elif self.current_theme == THEME_LIGHT and "vista" in style.theme_names():
+            style.theme_use("vista")
+        style.configure(".", background=palette["root_bg"], foreground=palette["text"])
+        style.configure("TFrame", background=palette["root_bg"])
+        style.configure("TLabel", background=palette["root_bg"], foreground=palette["text"])
+        style.configure("TCheckbutton", background=palette["root_bg"], foreground=palette["text"])
+        style.configure("TNotebook", background=palette["root_bg"])
+        style.configure("TNotebook.Tab", padding=(18, 8), font=("Segoe UI", 10, "bold"))
+        style.configure("Treeview", background=palette["card_bg"], fieldbackground=palette["card_bg"], foreground=palette["text"])
+        style.configure("Treeview.Heading", background=palette["panel_bg"], foreground=palette["text"])
+        self.root.configure(bg=palette["root_bg"])
+        nav = self.widgets.get("nav_frame")
+        if nav is not None:
+            nav.configure(bg=palette["panel_bg"])
+        for canvas_name in ("small_chart_canvas", "history_chart_canvas"):
+            canvas = getattr(self, canvas_name, None)
+            if canvas is not None:
+                canvas.configure(bg=palette["card_bg"], highlightbackground=palette["border"])
+        if hasattr(self, "event_list"):
+            self.event_list.configure(
+                bg=palette["list_bg"],
+                fg=palette["text"],
+                highlightbackground=palette["border"],
+                selectbackground=palette["nav_active_bg"],
+                selectforeground=palette["nav_active_fg"],
+            )
+        self._draw_history_charts()
+        self._update_nav_state()
+
+    def _tick_theme(self) -> None:
+        detected_theme = current_system_theme()
+        if detected_theme != self.current_theme:
+            self.current_theme = detected_theme
+            self._apply_theme()
+        self.root.after(5000, self._tick_theme)
 
     def _hide_to_tray(self) -> None:
         if not self.tray_available or self.tray_icon is None:
@@ -2064,6 +2634,7 @@ class NetworkWatchdogApp:
     def _exit_app(self) -> None:
         self.closing = True
         self.stop_event.set()
+        self._mark_run_clean_exit()
         if self.tray_icon is not None:
             try:
                 self.tray_icon.stop()

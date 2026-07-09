@@ -1,6 +1,6 @@
 # Network Watchdog / VPN Coffee Companion
 
-Current stable version: `1.1.1`
+Current stable version: `1.2.0`
 
 Windows 10 / 11 desktop watchdog for checking whether the local machine can reach selected external websites over real HTTPS requests, while also tracking local CPU, memory, and C drive usage.
 
@@ -61,6 +61,11 @@ It is designed for this workflow:
 - Full history chart for the last 6 hours
 - CPU, memory, and C drive usage monitoring
 - Email alerts for degraded network state, outages, and high system resource usage
+- Battery-power email alerts for devices that support battery status
+- Daily summary email with configurable send time
+- External IP and country display with multi-source fallback
+- Tray colors for `Normal`, `Slow`, and `Offline`
+- Automatic light/dark mode following the Windows system theme
 - Daily email alert counter on the main screen
 - English UI by default, with Chinese language switch
 - Automatic SMTP path fallback between SSL `465` and STARTTLS `587`
@@ -119,6 +124,16 @@ The runtime package uses PyInstaller `onedir` mode instead of `onefile` mode to 
 - `Lite`: does not include Python, much smaller, best when the target machine already has Python 3.10+ or when you want to install dependencies locally with `install_lite.bat`
 
 ## Release Notes
+
+### v1.2.0
+
+- Added a three-state model: `Normal`, `Slow`, and `Offline`
+- Added tray color updates for green, yellow, and red network state
+- Added a dynamic slow-state boundary at 30% of the average latency alert threshold
+- Added daily summary email settings and scheduled summary delivery
+- Added external public IP plus country display with multi-source lookup fallback
+- Added battery-power email alerts for systems that expose battery status
+- Added automatic Windows light/dark theme following
 
 ### v1.1.1
 
